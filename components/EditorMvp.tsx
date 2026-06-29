@@ -188,8 +188,8 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
           resolve();
           return;
         }
-        const maxWidth = 920;
-        const scale = Math.min(1, maxWidth / img.naturalWidth);
+        const maxPreviewDimension = 2600;
+        const scale = Math.min(1, maxPreviewDimension / Math.max(img.naturalWidth, img.naturalHeight));
         target.canvas.width = Math.round(img.naturalWidth * scale);
         target.canvas.height = Math.round(img.naturalHeight * scale);
         syncMaskCanvas(target.canvas.width, target.canvas.height);
@@ -521,8 +521,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     harmonizeInpaint(result, mask, target.canvas.width, target.canvas.height);
     target.ctx.putImageData(result, 0, 0);
 
-    const sourceType = imageUrl.startsWith("data:image/jpeg") ? "image/jpeg" : "image/png";
-    const output = target.canvas.toDataURL(sourceType, sourceType === "image/jpeg" ? 0.96 : undefined);
+    const output = target.canvas.toDataURL("image/png");
     setResultUrl(output);
     setShowAfter(true);
     clearMask();
@@ -565,7 +564,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       }
     }
 
-    return dilateMask(mask, width, height, options.preciseWatermark ? 2 : 3);
+    return dilateMask(mask, width, height, options.preciseWatermark ? 4 : 3);
   }
 
   function buildPreciseWatermarkMask(mask: Uint8Array, width: number, height: number, targetSelection: SelectionBox) {
@@ -826,9 +825,9 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
           {toast}
         </div>
       ) : null}
-      <div className="grid gap-5 lg:grid-cols-[1fr_240px]">
+      <div className="editor-shell grid gap-5 lg:grid-cols-[1fr_240px]">
         <section className="glass-panel overflow-hidden rounded-lg">
-          <div className="flex min-h-[84px] flex-wrap items-center gap-3 border-b border-slate-200 px-5 py-3">
+          <div className="editor-toolbar flex min-h-[84px] flex-wrap items-center gap-3 border-b border-slate-200 px-5 py-3">
             <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleUpload} />
             <Button onClick={() => fileInputRef.current?.click()} disabled={locked} className="h-12">
               <Upload className="h-5 w-5" />
@@ -922,7 +921,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
             ) : null}
           </div>
 
-          <div className="grid gap-5 p-5 xl:grid-cols-2">
+          <div className="editor-canvases grid gap-5 p-5 xl:grid-cols-2">
             <div className="relative overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
               <span className="absolute right-4 top-4 z-10 rounded-md bg-slate-900/60 px-3 py-2 text-sm font-bold text-white">الصورة الأصلية</span>
               <div className="relative mx-auto w-full overflow-hidden" style={{ aspectRatio: imageAspect }}>
@@ -989,7 +988,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-5 py-4">
+          <div className="editor-actions flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-5 py-4">
             <div className="flex items-center gap-3 rounded-md border border-emerald-200 px-4 py-3 text-sm font-bold text-emerald-700">
               <BadgeCheck className="h-5 w-5" />
               {unlocked ? "تم تفعيل الأداة بنجاح" : "المحرر مقفل حتى إدخال كود صحيح"}

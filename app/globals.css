@@ -73,4 +73,45 @@ select {
   .app-container {
     width: min(100% - 24px, 1510px);
   }
+
+  .editor-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .editor-toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    padding: 12px;
+    scroll-snap-type: x proximity;
+  }
+
+  .editor-toolbar > * {
+    flex: 0 0 auto;
+    scroll-snap-align: start;
+  }
+
+  .editor-toolbar .tool-button {
+    height: 64px;
+    width: 72px;
+  }
+
+  .editor-canvases {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .editor-actions {
+    align-items: stretch;
+    padding: 12px;
+  }
+
+  .editor-actions > div:last-child {
+    width: 100%;
+  }
+
+  .editor-actions button {
+    flex: 1 1 140px;
+  }
 }
