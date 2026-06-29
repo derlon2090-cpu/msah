@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/db";
+import { getDatabaseUrl, prisma } from "@/lib/db";
 
 let ensurePromise: Promise<void> | null = null;
 
@@ -82,6 +82,10 @@ async function createSchema() {
 }
 
 export async function ensureDatabase() {
+  if (!getDatabaseUrl()) {
+    throw new Error("DATABASE_URL غير موجود في Vercel Production. أضفه لكل البيئات أو أضف POSTGRES_URL من Neon.");
+  }
+
   ensurePromise ??= createSchema().catch((error) => {
     ensurePromise = null;
     throw error;
