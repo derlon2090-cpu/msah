@@ -5,8 +5,7 @@ import { Logo } from "@/components/Logo";
 const links = [
   ["الرئيسية", "/"],
   ["الصور", "/images"],
-  ["الأسعار", "/pricing"],
-  ["الأدمن", "/control"]
+  ["الأسعار", "/pricing"]
 ];
 
 export function Header() {
