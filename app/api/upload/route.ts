@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getCurrentCodeSession } from "@/lib/code-auth";
 import { parseImageDataUrl } from "@/lib/storage";
 
+export const dynamic = "force-dynamic";
+
 export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
   const image = String(body.image ?? "");

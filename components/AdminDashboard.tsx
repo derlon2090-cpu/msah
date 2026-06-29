@@ -6,6 +6,7 @@ import {
   Eye,
   ImageIcon,
   KeyRound,
+  Loader2,
   LogOut,
   Pencil,
   Power,
@@ -14,7 +15,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ActivationCode, PricingPlan, ProcessedImage } from "@/lib/types";
+import { ActivationCode, ProcessedImage } from "@/lib/types";
 import { formatDate, generateActivationCode } from "@/lib/utils";
 import { Logo } from "@/components/Logo";
 
@@ -34,80 +35,94 @@ const emptyStats: Stats = {
   remainingUses: 0
 };
 
+const emptyForm = () => ({
+  customer_name: "",
+  code: generateActivationCode(),
+  total_uses: 20,
+  remaining_uses: 20,
+  expires_at: "",
+  is_active: true
+});
+
 export function AdminDashboard() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [codes, setCodes] = useState<ActivationCode[]>([]);
   const [images, setImages] = useState<ProcessedImage[]>([]);
   const [stats, setStats] = useState<Stats>(emptyStats);
-  const [plans, setPlans] = useState<PricingPlan[]>([]);
-  const [maxImageMb, setMaxImageMb] = useState(25);
   const [toast, setToast] = useState("");
-  const [form, setForm] = useState({
-    customer_name: "",
-    code: generateActivationCode(),
-    total_uses: 20,
-    remaining_uses: 20,
-    expires_at: "",
-    is_active: true,
-    notes: ""
-  });
+  const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showImagesFor, setShowImagesFor] = useState<string | null>(null);
 
   const imagesForCode = useMemo(
-    () => images.filter((image) => image.activation_code_id === showImagesFor),
+    () => images.filter((image) => image.activation_code_id === showImagesFor && !image.deleted_at),
     [images, showImagesFor]
   );
 
   useEffect(() => {
     loadAdmin();
-    fetch("/api/admin/pricing")
-      .then((response) => response.json())
-      .then((payload) => {
-        setPlans(payload.plans ?? []);
-        setMaxImageMb(payload.settings?.max_image_mb ?? 25);
-      });
   }, []);
 
   function notify(message: string) {
     setToast(message);
-    window.setTimeout(() => setToast(""), 2400);
+    window.setTimeout(() => setToast(""), 3200);
+  }
+
+  async function readJson(response: Response) {
+    const text = await response.text();
+    try {
+      return text ? JSON.parse(text) : {};
+    } catch {
+      return { error: text || "استجابة غير مفهومة من الخادم" };
+    }
   }
 
   async function loadAdmin() {
     setLoading(true);
-    const response = await fetch("/api/admin/codes");
-    if (response.status === 401) {
+    try {
+      const response = await fetch("/api/admin/codes", { cache: "no-store" });
+      const payload = await readJson(response);
+      if (response.status === 401) {
+        setLoggedIn(false);
+        return;
+      }
+      if (!response.ok) throw new Error(payload.error ?? "تعذر تحميل لوحة الأدمن");
+      setCodes(payload.codes ?? []);
+      setImages(payload.images ?? []);
+      setStats(payload.stats ?? emptyStats);
+      setLoggedIn(true);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "تعذر تحميل لوحة الأدمن");
       setLoggedIn(false);
+    } finally {
       setLoading(false);
-      return;
     }
-    const payload = await response.json();
-    setCodes(payload.codes ?? []);
-    setImages(payload.images ?? []);
-    setStats(payload.stats ?? emptyStats);
-    setMaxImageMb(payload.settings?.max_image_mb ?? 25);
-    setLoggedIn(true);
-    setLoading(false);
   }
 
   async function login(event: FormEvent) {
     event.preventDefault();
-    const response = await fetch("/api/admin/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password })
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      notify(payload.error ?? "فشل تسجيل الدخول");
-      return;
+    if (busy) return;
+    setBusy(true);
+    try {
+      const response = await fetch("/api/admin/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password })
+      });
+      const payload = await readJson(response);
+      if (!response.ok) throw new Error(payload.error ?? "بيانات الدخول غير صحيحة");
+      notify("تم تسجيل الدخول");
+      setLoggedIn(true);
+      await loadAdmin();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "فشل تسجيل الدخول");
+    } finally {
+      setBusy(false);
     }
-    notify("تم تسجيل الدخول");
-    loadAdmin();
   }
 
   async function logout() {
@@ -118,28 +133,25 @@ export function AdminDashboard() {
 
   async function submitCode(event: FormEvent) {
     event.preventDefault();
-    const response = await fetch(editingId ? `/api/admin/codes/${editingId}` : "/api/admin/codes", {
-      method: editingId ? "PATCH" : "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form)
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      notify(payload.error ?? "تعذر حفظ الكود");
-      return;
+    if (busy) return;
+    setBusy(true);
+    try {
+      const response = await fetch(editingId ? `/api/admin/codes/${editingId}` : "/api/admin/codes", {
+        method: editingId ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form)
+      });
+      const payload = await readJson(response);
+      if (!response.ok) throw new Error(payload.error ?? "تعذر حفظ الكود");
+      notify(editingId ? "تم تعديل الكود" : "تم إنشاء الكود ويمكن للعميل استخدامه الآن");
+      setEditingId(null);
+      setForm(emptyForm());
+      await loadAdmin();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "تعذر حفظ الكود");
+    } finally {
+      setBusy(false);
     }
-    notify(editingId ? "تم تعديل كود التفعيل" : "تم إنشاء كود التفعيل");
-    setEditingId(null);
-    setForm({
-      customer_name: "",
-      code: generateActivationCode(),
-      total_uses: 20,
-      remaining_uses: 20,
-      expires_at: "",
-      is_active: true,
-      notes: ""
-    });
-    loadAdmin();
   }
 
   async function copyCode(code: string) {
@@ -153,8 +165,9 @@ export function AdminDashboard() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch)
     });
+    const payload = await readJson(response);
     if (!response.ok) {
-      notify("تعذر تعديل الكود");
+      notify(payload.error ?? "تعذر تعديل الكود");
       return;
     }
     notify(message);
@@ -162,9 +175,11 @@ export function AdminDashboard() {
   }
 
   async function deleteCode(id: string) {
+    if (!window.confirm("حذف الكود سيحذف الجلسات والصور المرتبطة به. هل تريد المتابعة؟")) return;
     const response = await fetch(`/api/admin/codes/${id}`, { method: "DELETE" });
+    const payload = await readJson(response);
     if (!response.ok) {
-      notify("تعذر حذف الكود");
+      notify(payload.error ?? "تعذر حذف الكود");
       return;
     }
     notify("تم حذف الكود");
@@ -177,8 +192,9 @@ export function AdminDashboard() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id })
     });
+    const payload = await readJson(response);
     if (!response.ok) {
-      notify("تعذر حذف الصورة");
+      notify(payload.error ?? "تعذر حذف الصورة");
       return;
     }
     notify("تم حذف الصورة");
@@ -193,19 +209,9 @@ export function AdminDashboard() {
       total_uses: item.total_uses,
       remaining_uses: item.remaining_uses,
       expires_at: item.expires_at ? item.expires_at.slice(0, 10) : "",
-      is_active: item.is_active,
-      notes: item.notes ?? ""
+      is_active: item.is_active
     });
     notify("يمكنك تعديل بيانات الكود من النموذج");
-  }
-
-  async function savePricing() {
-    await fetch("/api/admin/pricing", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ plans, settings: { max_image_mb: maxImageMb } })
-    });
-    notify("تم تعديل الأسعار والباقات");
   }
 
   if (loading) {
@@ -217,23 +223,21 @@ export function AdminDashboard() {
       <main className="min-h-screen bg-white">
         {toast ? <Toast message={toast} /> : null}
         <div className="app-container flex min-h-screen items-center justify-center py-12">
-          <form onSubmit={login} className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-6 shadow-soft">
+          <form onSubmit={login} className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-7 shadow-soft">
             <Logo />
-            <h1 className="mt-8 text-2xl font-black text-slate-950">دخول الأدمن</h1>
-            <p className="mt-2 text-sm text-slate-500">هذه شاشة خاصة لإدارة الأكواد والصور والباقات.</p>
+            <h1 className="mt-8 text-3xl font-black text-slate-950">دخول الأدمن</h1>
+            <p className="mt-2 text-sm text-slate-500">شاشة خاصة لإدارة الأكواد والصور والاستخدامات.</p>
             <div className="mt-6 space-y-4">
-              <label className="block text-sm font-bold text-slate-700">
-                البريد
-              <Input className="mt-2" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="admin@demo.com" />
-              </label>
-              <label className="block text-sm font-bold text-slate-700">
-                كلمة المرور
-                <Input className="mt-2" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="كلمة المرور من ENV" />
-              </label>
+              <Field label="البريد">
+                <Input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="rtlon@gmail.com" autoComplete="username" />
+              </Field>
+              <Field label="كلمة المرور">
+                <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="كلمة المرور" autoComplete="current-password" />
+              </Field>
             </div>
-            <Button className="mt-6 w-full" type="submit">
-              <KeyRound className="h-4 w-4" />
-              تسجيل الدخول
+            <Button className="mt-6 w-full" type="submit" disabled={busy}>
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+              {busy ? "جاري تسجيل الدخول" : "تسجيل الدخول"}
             </Button>
           </form>
         </div>
@@ -242,7 +246,7 @@ export function AdminDashboard() {
   }
 
   return (
-    <main className="min-h-screen bg-white">
+    <main className="min-h-screen bg-slate-50">
       {toast ? <Toast message={toast} /> : null}
       <header className="border-b border-slate-200 bg-white">
         <div className="app-container flex h-20 items-center justify-between">
@@ -253,55 +257,41 @@ export function AdminDashboard() {
           </Button>
         </div>
       </header>
+
       <section className="app-container py-8">
         <div className="grid gap-4 md:grid-cols-5">
-          <Stat label="عدد الأكواد الكلي" value={stats.totalCodes} />
+          <Stat label="كل الأكواد" value={stats.totalCodes} />
           <Stat label="الأكواد النشطة" value={stats.activeCodes} />
           <Stat label="الأكواد المنتهية" value={stats.expiredCodes} />
-          <Stat label="إجمالي الصور المعالجة" value={stats.totalImages} />
-          <Stat label="إجمالي الاستخدامات المتبقية" value={stats.remainingUses} />
+          <Stat label="الصور المحفوظة" value={stats.totalImages} />
+          <Stat label="الاستخدامات المتبقية" value={stats.remainingUses} />
         </div>
 
         <div className="mt-8 grid gap-6 xl:grid-cols-[420px_1fr]">
           <form onSubmit={submitCode} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between gap-3">
-              <h2 className="text-xl font-black text-slate-950">{editingId ? "تعديل كود تفعيل" : "إنشاء كود تفعيل"}</h2>
+              <h2 className="text-xl font-black text-slate-950">{editingId ? "تعديل كود" : "إنشاء كود تفعيل"}</h2>
               {editingId ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setEditingId(null);
-                    setForm({
-                      customer_name: "",
-                      code: generateActivationCode(),
-                      total_uses: 20,
-                      remaining_uses: 20,
-                      expires_at: "",
-                      is_active: true,
-                      notes: ""
-                    });
-                  }}
-                >
+                <Button type="button" variant="ghost" size="sm" onClick={() => { setEditingId(null); setForm(emptyForm()); }}>
                   إلغاء
                 </Button>
               ) : null}
             </div>
+
             <div className="mt-5 space-y-4">
               <Field label="اسم العميل اختياري">
                 <Input value={form.customer_name} onChange={(event) => setForm({ ...form, customer_name: event.target.value })} />
               </Field>
               <Field label="كود التفعيل">
                 <div className="flex gap-2">
-                  <Input value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} />
+                  <Input value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value.toUpperCase() })} />
                   <Button type="button" variant="soft" onClick={() => setForm({ ...form, code: generateActivationCode() })}>
                     <Sparkles className="h-4 w-4" />
                     توليد
                   </Button>
                 </div>
               </Field>
-              <Field label="عدد مرات الاستخدام">
+              <Field label="إجمالي الاستخدامات">
                 <Input
                   type="number"
                   min={1}
@@ -312,28 +302,29 @@ export function AdminDashboard() {
                   }}
                 />
               </Field>
-              {editingId ? (
-                <Field label="مرات الاستخدام المتبقية">
-                  <Input
-                    type="number"
-                    min={0}
-                    value={form.remaining_uses}
-                    onChange={(event) => setForm({ ...form, remaining_uses: Number(event.target.value) })}
-                  />
-                </Field>
-              ) : null}
-              <Field label="تاريخ انتهاء الكود">
+              <Field label="الاستخدامات المتبقية">
+                <Input
+                  type="number"
+                  min={0}
+                  max={form.total_uses}
+                  value={form.remaining_uses}
+                  onChange={(event) => setForm({ ...form, remaining_uses: Number(event.target.value) })}
+                />
+              </Field>
+              <Field label="تاريخ انتهاء الكود اختياري">
                 <Input type="date" value={form.expires_at} onChange={(event) => setForm({ ...form, expires_at: event.target.value })} />
+                <button type="button" className="mt-2 text-xs font-bold text-blue-700" onClick={() => setForm({ ...form, expires_at: "" })}>
+                  حذف تاريخ الانتهاء
+                </button>
               </Field>
               <label className="flex items-center justify-between rounded-md border border-slate-200 px-4 py-3 text-sm font-bold text-slate-700">
-                حالة الكود: {form.is_active ? "نشط" : "غير نشط"}
+                حالة الكود: {form.is_active ? "نشط" : "معطل"}
                 <input type="checkbox" checked={form.is_active} onChange={(event) => setForm({ ...form, is_active: event.target.checked })} />
               </label>
-              <Field label="ملاحظات داخلية">
-                <Input value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} />
-              </Field>
             </div>
-            <Button className="mt-5 w-full" type="submit">
+
+            <Button className="mt-5 w-full" type="submit" disabled={busy}>
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               {editingId ? "حفظ التعديل" : "إنشاء الكود"}
             </Button>
           </form>
@@ -345,13 +336,13 @@ export function AdminDashboard() {
                 <thead className="bg-slate-50 text-xs font-black text-slate-500">
                   <tr>
                     <th className="px-3 py-3">الكود</th>
-                    <th className="px-3 py-3">اسم العميل</th>
-                    <th className="px-3 py-3">الاستخدامات الكلية</th>
-                    <th className="px-3 py-3">الاستخدامات المتبقية</th>
-                    <th className="px-3 py-3">تاريخ الانتهاء</th>
+                    <th className="px-3 py-3">العميل</th>
+                    <th className="px-3 py-3">الإجمالي</th>
+                    <th className="px-3 py-3">المتبقي</th>
+                    <th className="px-3 py-3">الانتهاء</th>
                     <th className="px-3 py-3">الحالة</th>
-                    <th className="px-3 py-3">تاريخ الإنشاء</th>
-                    <th className="px-3 py-3">أزرار</th>
+                    <th className="px-3 py-3">الإنشاء</th>
+                    <th className="px-3 py-3">إجراءات</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -363,30 +354,31 @@ export function AdminDashboard() {
                       <td className="px-3 py-3">{item.remaining_uses}</td>
                       <td className="px-3 py-3">{formatDate(item.expires_at)}</td>
                       <td className="px-3 py-3">
-                        <span className={item.is_active ? "text-emerald-600" : "text-slate-400"}>
-                          {item.is_active ? "نشط" : "غير نشط"}
-                        </span>
+                        <span className={item.is_active ? "text-emerald-600" : "text-slate-400"}>{item.is_active ? "نشط" : "معطل"}</span>
                       </td>
                       <td className="px-3 py-3">{formatDate(item.created_at)}</td>
                       <td className="px-3 py-3">
                         <div className="flex flex-wrap gap-2">
                           <IconButton label="نسخ الكود" onClick={() => copyCode(item.code)} icon={<Copy className="h-4 w-4" />} />
+                          <IconButton label="تعديل" onClick={() => startEdit(item)} icon={<Pencil className="h-4 w-4" />} />
                           <IconButton
-                            label="تعديل"
-                            onClick={() => startEdit(item)}
-                            icon={<Pencil className="h-4 w-4" />}
-                          />
-                          <IconButton
-                            label="تعطيل"
+                            label={item.is_active ? "تعطيل" : "تفعيل"}
                             onClick={() => patchCode(item.id, { is_active: !item.is_active }, item.is_active ? "تم تعطيل الكود" : "تم تفعيل الكود")}
                             icon={<Power className="h-4 w-4" />}
                           />
                           <IconButton label="حذف" onClick={() => deleteCode(item.id)} icon={<Trash2 className="h-4 w-4" />} destructive />
-                          <IconButton label="عرض الصور المرتبطة" onClick={() => setShowImagesFor(showImagesFor === item.id ? null : item.id)} icon={<Eye className="h-4 w-4" />} />
+                          <IconButton label="عرض الصور" onClick={() => setShowImagesFor(showImagesFor === item.id ? null : item.id)} icon={<Eye className="h-4 w-4" />} />
                         </div>
                       </td>
                     </tr>
                   ))}
+                  {!codes.length ? (
+                    <tr>
+                      <td className="px-3 py-8 text-center text-sm font-bold text-slate-500" colSpan={8}>
+                        لا توجد أكواد بعد. أنشئ كودًا من النموذج وسيعمل مباشرة في صفحة التفعيل.
+                      </td>
+                    </tr>
+                  ) : null}
                 </tbody>
               </table>
             </div>
@@ -397,7 +389,7 @@ export function AdminDashboard() {
           <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="flex items-center gap-2 text-xl font-black text-slate-950">
               <ImageIcon className="h-5 w-5 text-blue-700" />
-              الصور المرتبطة
+              الصور المرتبطة بالكود
             </h2>
             <div className="mt-4 grid gap-4 md:grid-cols-3">
               {imagesForCode.map((image) => (
@@ -415,33 +407,6 @@ export function AdminDashboard() {
             </div>
           </div>
         ) : null}
-
-        <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="text-xl font-black text-slate-950">تعديل الأسعار والباقات</h2>
-          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {plans.map((plan, index) => (
-              <div key={plan.id} className="rounded-md border border-slate-200 p-4">
-                <Field label="اسم الباقة">
-                  <Input value={plan.name} onChange={(event) => setPlans((items) => items.map((item, i) => (i === index ? { ...item, name: event.target.value } : item)))} />
-                </Field>
-                <Field label="الاستخدامات">
-                  <Input value={plan.uses} onChange={(event) => setPlans((items) => items.map((item, i) => (i === index ? { ...item, uses: event.target.value } : item)))} />
-                </Field>
-                <Field label="السعر">
-                  <Input value={plan.price} onChange={(event) => setPlans((items) => items.map((item, i) => (i === index ? { ...item, price: event.target.value } : item)))} />
-                </Field>
-              </div>
-            ))}
-          </div>
-          <div className="mt-5 flex flex-wrap items-center gap-3">
-            <Button onClick={savePricing}>حفظ الأسعار</Button>
-            <label className="flex items-center gap-3 text-sm font-bold text-slate-600">
-              الحد الأقصى لحجم الصورة
-              <Input className="w-28" type="number" min={1} value={maxImageMb} onChange={(event) => setMaxImageMb(Number(event.target.value))} />
-              ميجابايت
-            </label>
-          </div>
-        </div>
       </section>
     </main>
   );

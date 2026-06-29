@@ -3,6 +3,8 @@ import { getCurrentCodeSession } from "@/lib/code-auth";
 import { createProcessedImageAfterSuccess } from "@/lib/images";
 import { isStorageConfigured } from "@/lib/storage";
 
+export const dynamic = "force-dynamic";
+
 export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
   const originalDataUrl = String(body.originalDataUrl ?? body.originalUrl ?? "");

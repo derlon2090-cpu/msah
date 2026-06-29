@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { isAdminRequest } from "@/lib/admin-auth";
 import { markImageDeleted } from "@/lib/images";
 
+export const dynamic = "force-dynamic";
+
 export async function DELETE(request: Request) {
   if (!isAdminRequest(request)) return NextResponse.json({ error: "غير مصرح" }, { status: 401 });
   const body = await request.json().catch(() => ({}));

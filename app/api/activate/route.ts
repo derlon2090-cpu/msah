@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { createCodeSession, isActivationCodeUsable, normalizeCode } from "@/lib/code-auth";
+import { ensureDatabase } from "@/lib/ensure-db";
+
+export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
+  await ensureDatabase();
   const body = await request.json().catch(() => ({}));
   const rawCode = normalizeCode(String(body.code ?? ""));
   if (!rawCode) return NextResponse.json({ error: "أدخل كود التفعيل" }, { status: 400 });

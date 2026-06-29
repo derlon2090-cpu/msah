@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { ensureDatabase } from "@/lib/ensure-db";
 import { deleteStorageObject, uploadDataUrl } from "@/lib/storage";
 
 export const imageRetentionDays = 10;
@@ -12,6 +13,7 @@ export async function createProcessedImageAfterSuccess(input: {
   originalDataUrl: string;
   resultDataUrl: string;
 }) {
+  await ensureDatabase();
   const original = await uploadDataUrl(input.originalDataUrl, "original");
   const result = await uploadDataUrl(input.resultDataUrl, "result");
   const now = new Date();
@@ -55,6 +57,7 @@ export async function createProcessedImageAfterSuccess(input: {
 }
 
 export async function markImageDeleted(id: string, activationCodeId?: string) {
+  await ensureDatabase();
   const image = await prisma.processedImage.findFirst({
     where: { id, ...(activationCodeId ? { activationCodeId } : {}), deletedAt: null }
   });
@@ -74,6 +77,7 @@ export async function markImageDeleted(id: string, activationCodeId?: string) {
 }
 
 export async function deleteExpiredImages() {
+  await ensureDatabase();
   const expired = await prisma.processedImage.findMany({
     where: { expiresAt: { lt: new Date() }, deletedAt: null }
   });

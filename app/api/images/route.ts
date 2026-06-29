@@ -3,6 +3,8 @@ import { getCurrentCodeSession } from "@/lib/code-auth";
 import { prisma } from "@/lib/db";
 import { markImageDeleted } from "@/lib/images";
 
+export const dynamic = "force-dynamic";
+
 function serializeImage(image: {
   id: string;
   activationCodeId: string;

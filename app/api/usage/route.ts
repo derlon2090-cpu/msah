@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getCurrentCodeSession } from "@/lib/code-auth";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   const session = await getCurrentCodeSession();
   const code = session?.activationCode;

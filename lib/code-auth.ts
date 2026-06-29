@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { randomBytes, createHash } from "crypto";
 import { prisma } from "@/lib/db";
+import { ensureDatabase } from "@/lib/ensure-db";
 
 export const codeSessionCookie = "activation_session";
 
@@ -25,6 +26,7 @@ export function isActivationCodeUsable(code: {
 }
 
 export async function createCodeSession(activationCodeId: string) {
+  await ensureDatabase();
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30);
 
@@ -48,6 +50,7 @@ export async function createCodeSession(activationCodeId: string) {
 }
 
 export async function getCurrentCodeSession() {
+  await ensureDatabase();
   const token = cookies().get(codeSessionCookie)?.value;
   if (!token) return null;
 
@@ -63,6 +66,7 @@ export async function getCurrentCodeSession() {
 }
 
 export async function revokeCurrentCodeSession() {
+  await ensureDatabase();
   const token = cookies().get(codeSessionCookie)?.value;
   if (token) {
     await prisma.codeSession.updateMany({

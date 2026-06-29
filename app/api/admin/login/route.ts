@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { createAdminSession, setAdminCookie } from "@/lib/admin-auth";
 
+export const dynamic = "force-dynamic";
+
 const temporaryAdminEmail = "rtlon@gmail.com";
 const temporaryAdminPassword = "14161416hH";
 
