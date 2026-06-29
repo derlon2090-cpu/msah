@@ -4,10 +4,12 @@ import { ChangeEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "r
 import {
   BadgeCheck,
   Brush,
+  Crop,
   Download,
   Eraser,
   Hand,
   ImageIcon,
+  ImageOff,
   Lock,
   LockOpen,
   Maximize,
@@ -26,7 +28,7 @@ import { Input } from "@/components/ui/input";
 import { DetectionBox } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-type Tool = "move" | "rect" | "brush" | "erase";
+type Tool = "move" | "rect" | "brush" | "erase" | "crop";
 type Status = "idle" | "uploading" | "analyzing" | "removing" | "done" | "failed";
 
 type Usage = {
@@ -46,6 +48,9 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
   const [status, setStatus] = useState<Status>("idle");
   const [tool, setTool] = useState<Tool>("rect");
   const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [dragStart, setDragStart] = useState<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  const [brushSize, setBrushSize] = useState(34);
   const [imageUrl, setImageUrl] = useState("");
   const [resultUrl, setResultUrl] = useState("");
   const [uploadedUrl, setUploadedUrl] = useState("");
@@ -178,6 +183,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       setFuture([]);
       setResultUrl("");
       setShowAfter(false);
+      setPan({ x: 0, y: 0 });
     };
     img.src = src;
     setImageUrl(src);
@@ -218,6 +224,52 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     mask.ctx.clearRect(0, 0, mask.canvas.width, mask.canvas.height);
   }
 
+  function removeCurrentImage() {
+    imageRef.current = null;
+    const target = getCanvas();
+    if (target) target.ctx.clearRect(0, 0, target.canvas.width, target.canvas.height);
+    clearMask();
+    setImageUrl("");
+    setResultUrl("");
+    setUploadedUrl("");
+    setShowAfter(false);
+    setDetections([]);
+    setHistory([]);
+    setFuture([]);
+    setPan({ x: 0, y: 0 });
+    setSelection({ x: 88, y: 86, w: 8, h: 8 });
+    notify("تمت إزالة الصورة، اختر صورة أخرى");
+    window.setTimeout(() => fileInputRef.current?.click(), 80);
+  }
+
+  function applyCrop() {
+    const img = imageRef.current;
+    if (!img) {
+      notify("ارفع صورة أولا");
+      return;
+    }
+
+    const sx = Math.max(0, Math.round((selection.x / 100) * img.naturalWidth));
+    const sy = Math.max(0, Math.round((selection.y / 100) * img.naturalHeight));
+    const sw = Math.max(8, Math.round((selection.w / 100) * img.naturalWidth));
+    const sh = Math.max(8, Math.round((selection.h / 100) * img.naturalHeight));
+    const width = Math.min(sw, img.naturalWidth - sx);
+    const height = Math.min(sh, img.naturalHeight - sy);
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx || width <= 0 || height <= 0) return;
+
+    canvas.width = width;
+    canvas.height = height;
+    ctx.drawImage(img, sx, sy, width, height, 0, 0, width, height);
+    const sourceType = imageUrl.startsWith("data:image/jpeg") ? "image/jpeg" : "image/png";
+    const cropped = canvas.toDataURL(sourceType, sourceType === "image/jpeg" ? 0.96 : undefined);
+    clearMask();
+    loadImage(cropped);
+    setTool("rect");
+    notify("تم قص الصورة");
+  }
+
   function undo() {
     if (history.length < 2) return;
     const previous = history[history.length - 2];
@@ -245,7 +297,9 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
   function onCanvasDown(event: MouseEvent<HTMLCanvasElement>) {
     if (locked || !unlocked) return;
     setIsDrawing(true);
-    if (tool === "rect") {
+    if (tool === "move") {
+      setDragStart({ x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y });
+    } else if (tool === "rect" || tool === "crop") {
       const point = pointerToPercent(event);
       setSelection({ x: point.x, y: point.y, w: 1, h: 1 });
     } else if (tool === "brush" || tool === "erase") {
@@ -255,7 +309,12 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
 
   function onCanvasMove(event: MouseEvent<HTMLCanvasElement>) {
     if (!isDrawing || locked || !unlocked) return;
-    if (tool === "rect") {
+    if (tool === "move" && dragStart) {
+      setPan({
+        x: dragStart.panX + event.clientX - dragStart.x,
+        y: dragStart.panY + event.clientY - dragStart.y
+      });
+    } else if (tool === "rect" || tool === "crop") {
       const point = pointerToPercent(event);
       setSelection((start) => ({
         x: Math.min(start.x, point.x),
@@ -271,6 +330,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
   function onCanvasUp() {
     if (!isDrawing) return;
     setIsDrawing(false);
+    setDragStart(null);
     if (tool === "brush" || tool === "erase") pushHistory();
   }
 
@@ -285,7 +345,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     mask.ctx.globalCompositeOperation = erase ? "destination-out" : "source-over";
     mask.ctx.fillStyle = "rgba(124, 58, 237, 0.62)";
     mask.ctx.beginPath();
-    mask.ctx.arc(x, y, erase ? 24 : 34, 0, Math.PI * 2);
+    mask.ctx.arc(x, y, erase ? Math.max(6, brushSize * 0.72) : brushSize, 0, Math.PI * 2);
     mask.ctx.fill();
     mask.ctx.restore();
   }
@@ -553,7 +613,8 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error ?? "تعذر حفظ الصورة");
-      setUsage(payload.usage);
+      if (payload.usage) setUsage(payload.usage);
+      await refreshUsage();
       setStatus("done");
       notify("تمت إزالة العنصر مع حفظ الصورة");
     } catch (error) {
@@ -571,6 +632,8 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
 
   const usageLabel = usage ? `${usage.remaining_uses} من ${usage.total_uses} استخدام` : "0 من 0 استخدام";
 
+  const canvasTransform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
+
   return (
     <div className="relative">
       {toast ? (
@@ -585,6 +648,10 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
             <Button onClick={() => fileInputRef.current?.click()} disabled={locked} className="h-12">
               <Upload className="h-5 w-5" />
               رفع صورة جديدة
+            </Button>
+            <Button variant="outline" onClick={removeCurrentImage} disabled={!imageUrl} className="h-12">
+              <ImageOff className="h-5 w-5" />
+              إزالة الصورة
             </Button>
             <div className={cn("flex h-12 items-center gap-3 border-r border-slate-200 pr-4", unlocked && "text-emerald-700")}>
               {unlocked ? <LockOpen className="h-6 w-6" /> : <Lock className="h-6 w-6" />}
@@ -606,6 +673,10 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
               <SquareDashedMousePointer className="h-6 w-6" />
               تحديد
             </button>
+            <button className={cn("tool-button", tool === "crop" && "active")} onClick={() => setTool("crop")} type="button">
+              <Crop className="h-6 w-6" />
+              قص
+            </button>
             <button className={cn("tool-button", tool === "brush" && "active")} onClick={() => setTool("brush")} type="button">
               <Brush className="h-6 w-6" />
               فرشاة
@@ -614,6 +685,18 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
               <Eraser className="h-6 w-6" />
               ممحاة
             </button>
+            <label className="flex h-12 min-w-44 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-black text-slate-700">
+              <span>الحجم</span>
+              <input
+                type="range"
+                min="8"
+                max="90"
+                value={brushSize}
+                onChange={(event) => setBrushSize(Number(event.target.value))}
+                className="w-20 accent-violet-600"
+              />
+              <span className="min-w-6 text-center">{brushSize}</span>
+            </label>
             <button className="tool-button" onClick={() => setZoom((value) => Math.min(1.6, value + 0.1))} type="button">
               <Maximize className="h-6 w-6" />
               تكبير
@@ -647,8 +730,8 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
               <div className="relative mx-auto aspect-[920/492] w-full overflow-hidden">
                 <canvas
                   ref={canvasRef}
-                  className="h-full w-full cursor-crosshair object-contain"
-                  style={{ transform: `scale(${zoom})`, transformOrigin: "center" }}
+                  className={cn("h-full w-full object-contain", tool === "move" ? "cursor-grab" : "cursor-crosshair")}
+                  style={{ transform: canvasTransform, transformOrigin: "center" }}
                   onMouseDown={onCanvasDown}
                   onMouseMove={onCanvasMove}
                   onMouseUp={onCanvasUp}
@@ -657,7 +740,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
                 <canvas
                   ref={maskCanvasRef}
                   className="pointer-events-none absolute inset-0 h-full w-full object-contain mix-blend-multiply"
-                  style={{ transform: `scale(${zoom})`, transformOrigin: "center" }}
+                  style={{ transform: canvasTransform, transformOrigin: "center" }}
                 />
                 <div
                   className="pointer-events-none absolute border-2 border-dashed border-blue-600"
@@ -665,7 +748,9 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
                     right: `${100 - selection.x - selection.w}%`,
                     top: `${selection.y}%`,
                     width: `${selection.w}%`,
-                    height: `${selection.h}%`
+                    height: `${selection.h}%`,
+                    transform: canvasTransform,
+                    transformOrigin: "center"
                   }}
                 >
                   <span className="absolute -right-2 -top-2 h-4 w-4 rounded-full border-2 border-blue-600 bg-white" />
@@ -726,7 +811,13 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
                 <ScanSearch className="h-5 w-5" />
                 تحديث الاكتشاف
               </Button>
-              <Button onClick={removeObject} disabled={locked || !unlocked || status === "removing"}>
+              {tool === "crop" ? (
+                <Button variant="soft" onClick={applyCrop} disabled={locked || !unlocked || !imageUrl}>
+                  <Crop className="h-5 w-5" />
+                  تطبيق القص
+                </Button>
+              ) : null}
+              <Button onClick={removeObject} disabled={locked || !unlocked || !imageUrl || status === "removing"}>
                 <WandSparkles className="h-5 w-5" />
                 إزالة العنصر
               </Button>
