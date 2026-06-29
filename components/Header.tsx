@@ -6,7 +6,7 @@ const links = [
   ["الرئيسية", "/"],
   ["الصور", "/images"],
   ["الأسعار", "/pricing"],
-  ["الأدمن", "/admin"]
+  ["الأدمن", "/control"]
 ];
 
 export function Header() {

@@ -28,7 +28,6 @@ export function ActivationClient() {
       return;
     }
 
-    localStorage.setItem("activationCode", payload.code.code);
     setMessage(`${payload.code.remaining_uses} من ${payload.code.total_uses} استخدام`);
     router.push("/editor");
   }

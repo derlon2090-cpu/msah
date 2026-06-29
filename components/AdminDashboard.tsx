@@ -171,6 +171,20 @@ export function AdminDashboard() {
     loadAdmin();
   }
 
+  async function deleteAdminImage(id: string) {
+    const response = await fetch("/api/admin/images", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id })
+    });
+    if (!response.ok) {
+      notify("تعذر حذف الصورة");
+      return;
+    }
+    notify("تم حذف الصورة");
+    loadAdmin();
+  }
+
   function startEdit(item: ActivationCode) {
     setEditingId(item.id);
     setForm({
@@ -389,8 +403,12 @@ export function AdminDashboard() {
               {imagesForCode.map((image) => (
                 <div key={image.id} className="rounded-md border border-slate-200 p-3">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={image.result_url} alt="صورة معالجة" className="aspect-video w-full rounded-md object-cover" />
+                  <img src={image.result_url ?? image.result_image_url} alt="صورة معالجة" className="aspect-video w-full rounded-md object-cover" />
                   <p className="mt-2 text-xs font-bold text-slate-500">{formatDate(image.created_at)}</p>
+                  <Button className="mt-3 w-full" size="sm" variant="destructive" onClick={() => deleteAdminImage(image.id)}>
+                    <Trash2 className="h-4 w-4" />
+                    حذف الصورة
+                  </Button>
                 </div>
               ))}
               {!imagesForCode.length ? <p className="text-sm font-bold text-slate-500">لا توجد صور مرتبطة بهذا الكود.</p> : null}

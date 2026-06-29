@@ -1,71 +1,71 @@
-# ممحاة الذكاء الاصطناعي
+# AI Eraser RTL SaaS
 
-MVP عربي RTL لمنصة SaaS لإزالة الشعارات والعناصر غير المرغوبة من الصور. الواجهة مبنية بـ Next.js + TypeScript + Tailwind، مع مكونات UI بأسلوب shadcn، وطبقة تخزين قابلة للعمل محليا أو عبر Supabase/PostgreSQL.
+واجهة عربية RTL مبنية بـ Next.js App Router وTypeScript، مع باكند حقيقي عبر Prisma وNeon PostgreSQL وتخزين صور خارجي S3-compatible أو Cloudflare R2.
 
 ## التشغيل
 
 ```bash
 npm install
+npm run prisma:generate
 npm run dev
 ```
 
-افتح:
+الصفحات الأساسية:
 
-- الصفحة الرئيسية: `http://localhost:3000`
-- المحرر: `http://localhost:3000/editor`
-- التفعيل: `http://localhost:3000/activate`
-- الصور: `http://localhost:3000/images`
-- الأسعار: `http://localhost:3000/pricing`
-- الأدمن: `http://localhost:3000/admin`
+- `/activate`: دخول المستخدم بكود التفعيل.
+- `/editor`: معالجة الصور.
+- `/images`: صور الكود الحالي، وتظهر فقط قبل انتهاء مدة الحفظ.
+- `/admin`: لوحة إدارة الأكواد والصور.
 
 ## متغيرات البيئة
 
-انسخ `.env.example` إلى `.env.local` وعدل القيم:
+انسخ `.env.example` إلى `.env.local` واضبط القيم:
 
 ```env
-ADMIN_EMAIL=admin@demo.com
-ADMIN_PASSWORD=Admin12345!
+DATABASE_URL=postgresql://USER:PASSWORD@HOST.neon.tech/DB?sslmode=require
+
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD_HASH=$2a$12$replace-with-bcrypt-hash
 ADMIN_SESSION_SECRET=change-this-long-random-secret
 COOKIE_SECURE=false
+CRON_SECRET=change-this-cron-secret
+MAX_IMAGE_MB=25
+
+S3_ENDPOINT=https://ACCOUNT_ID.r2.cloudflarestorage.com
+S3_REGION=auto
+S3_BUCKET=ai-eraser-images
+S3_ACCESS_KEY_ID=
+S3_SECRET_ACCESS_KEY=
+S3_PUBLIC_BASE_URL=https://cdn.example.com
 ```
 
-للنشر على HTTPS اجعل `COOKIE_SECURE=true` أو احذفها حتى تستخدم الكوكي الآمن تلقائيا في production.
+أنشئ `ADMIN_PASSWORD_HASH` باستخدام bcrypt، ولا تضع كلمة مرور صريحة في الكود أو ملفات البيئة المشتركة.
 
-## Supabase
+## قاعدة البيانات
 
-مخطط الجداول موجود في:
-
-```text
-supabase/schema.sql
+```bash
+npm run prisma:migrate
+npm run db:seed
 ```
 
-الجداول الأساسية:
+الجداول:
 
 - `activation_codes`
+- `code_sessions`
 - `processed_images`
 
-إذا لم تكن متغيرات Supabase مضبوطة، يعمل الـ MVP بتخزين محلي داخل `.data/db.json` ورفع الصور إلى `public/uploads`.
+الجلسات تحفظ في HttpOnly cookie، وقيمة الجلسة المخزنة في قاعدة البيانات hashed.
 
-## كود تجربة
+## حذف الصور المنتهية
 
-يوجد كود مبدئي في التخزين المحلي ومخطط Supabase:
+الصور تحفظ 10 أيام فقط. شغّل cron يومي يستدعي:
 
-```text
-DEMO-2026
+```http
+POST /api/cron/delete-expired-images
+Authorization: Bearer ${CRON_SECRET}
 ```
 
-يعرض: `18 من 20 استخدام`.
-
-## مقارنة مع المرجع
-
-- هيدر عربي RTL أبيض مع شعار واضح.
-- منطقة "الدخول عبر كود التفعيل فقط" صغيرة وليست مودال كبير.
-- المحرر ظاهر مباشرة ومقفل قبل التفعيل.
-- القفل مدمج داخل المحرر ويتحول إلى مفتوح بعد التفعيل.
-- أدوات المحرر: رفع صورة، تحديد مستطيل، فرشاة Mask، ممحاة Mask، تراجع، إعادة، تكبير، تصغير، قبل/بعد.
-- لوحة جانبية للكشف الذكي مع حالة الاكتشاف ومرات الاستخدام المتبقية والصور السابقة.
-- استخدام العبارة "مرات الاستخدام المتبقية" وعدم استخدام "نقاط" أو "كريدت".
-- صفحة أدمن مباشرة على `/admin` مع دخول مستقل وإحصائيات وإنشاء/تعديل/تعطيل/حذف الأكواد.
+المسار يحذف الملفات من التخزين الخارجي ويحدّث `deleted_at` بدون حذف سجل قاعدة البيانات.
 
 ## الفحوصات
 

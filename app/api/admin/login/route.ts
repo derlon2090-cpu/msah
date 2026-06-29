@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import bcrypt from "bcryptjs";
 import { createAdminSession, setAdminCookie } from "@/lib/admin-auth";
 
 export async function POST(request: Request) {
@@ -6,15 +7,14 @@ export async function POST(request: Request) {
   const email = String(body.email ?? "");
   const password = String(body.password ?? "");
   const adminEmail = process.env.ADMIN_EMAIL;
-  const adminPassword = process.env.ADMIN_PASSWORD;
+  const adminPasswordHash = process.env.ADMIN_PASSWORD_HASH;
 
-  if (!adminEmail || !adminPassword) {
+  if (!adminEmail || !adminPasswordHash) {
     return NextResponse.json({ error: "بيانات الأدمن غير مضبوطة في ENV" }, { status: 500 });
   }
 
-  if (email !== adminEmail || password !== adminPassword) {
-    return NextResponse.json({ error: "بيانات الدخول غير صحيحة" }, { status: 401 });
-  }
+  const valid = email === adminEmail && (await bcrypt.compare(password, adminPasswordHash));
+  if (!valid) return NextResponse.json({ error: "بيانات الدخول غير صحيحة" }, { status: 401 });
 
   setAdminCookie(createAdminSession(email));
   return NextResponse.json({ ok: true });

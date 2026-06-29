@@ -6,6 +6,22 @@ import { Button } from "@/components/ui/button";
 import { ProcessedImage } from "@/lib/types";
 import { formatDate } from "@/lib/utils";
 
+function imageUrl(image: ProcessedImage, kind: "original" | "result") {
+  return kind === "original"
+    ? image.original_url ?? image.original_image_url
+    : image.result_url ?? image.result_image_url;
+}
+
+function remainingTime(expiresAt: string) {
+  const diff = new Date(expiresAt).getTime() - Date.now();
+  if (diff <= 0) return "تنتهي الآن";
+  const hours = Math.ceil(diff / (1000 * 60 * 60));
+  const days = Math.floor(hours / 24);
+  const restHours = hours % 24;
+  if (days > 0) return `${days} يوم و ${restHours} ساعة`;
+  return `${hours} ساعة`;
+}
+
 export function ImagesClient() {
   const [images, setImages] = useState<ProcessedImage[]>([]);
 
@@ -32,6 +48,9 @@ export function ImagesClient() {
     <section className="app-container py-10">
       <h1 className="text-4xl font-black text-slate-950">الصور</h1>
       <p className="mt-3 text-slate-500">كل صورة تمت معالجتها عبر كود التفعيل الحالي.</p>
+      <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">
+        يتم حفظ الصور لمدة 10 أيام فقط ثم تُحذف تلقائيًا.
+      </p>
       <div className="mt-8 grid gap-5 lg:grid-cols-2">
         {images.map((image) => (
           <article key={image.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -39,19 +58,21 @@ export function ImagesClient() {
               <div className="overflow-hidden rounded-md bg-slate-50">
                 <p className="px-3 py-2 text-xs font-black text-slate-500">قبل</p>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={image.original_url} alt="قبل" className="aspect-video w-full object-cover" />
+                <img src={imageUrl(image, "original")} alt="قبل" className="aspect-video w-full object-cover" />
               </div>
               <div className="overflow-hidden rounded-md bg-slate-50">
                 <p className="px-3 py-2 text-xs font-black text-slate-500">بعد</p>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={image.result_url} alt="بعد" className="aspect-video w-full object-cover" />
+                <img src={imageUrl(image, "result")} alt="بعد" className="aspect-video w-full object-cover" />
               </div>
             </div>
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-              <p className="text-sm font-bold text-slate-500">تاريخ المعالجة: {formatDate(image.created_at)}</p>
+              <p className="text-sm font-bold text-slate-500">
+                تاريخ المعالجة: {formatDate(image.created_at)} · متبقي قبل الحذف: {remainingTime(image.expires_at)}
+              </p>
               <div className="flex gap-2">
                 <Button asChild size="sm" variant="outline">
-                  <a href={image.result_url} download>
+                  <a href={imageUrl(image, "result")} download>
                     <Download className="h-4 w-4" />
                     تحميل
                   </a>

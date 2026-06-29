@@ -1,0 +1,55 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model ActivationCode {
+  id              String           @id @default(cuid())
+  code            String           @unique
+  customerName    String?          @map("customer_name")
+  totalUses       Int              @map("total_uses")
+  remainingUses   Int              @map("remaining_uses")
+  expiresAt       DateTime?        @map("expires_at")
+  isActive        Boolean          @default(true) @map("is_active")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+  sessions        CodeSession[]
+  processedImages ProcessedImage[]
+
+  @@map("activation_codes")
+}
+
+model CodeSession {
+  id               String         @id @default(cuid())
+  activationCodeId String         @map("activation_code_id")
+  sessionTokenHash String         @unique @map("session_token")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  expiresAt        DateTime       @map("expires_at")
+  revokedAt        DateTime?      @map("revoked_at")
+  activationCode   ActivationCode @relation(fields: [activationCodeId], references: [id], onDelete: Cascade)
+
+  @@index([activationCodeId])
+  @@index([expiresAt])
+  @@map("code_sessions")
+}
+
+model ProcessedImage {
+  id                 String         @id @default(cuid())
+  activationCodeId   String         @map("activation_code_id")
+  originalImageUrl   String         @map("original_image_url")
+  resultImageUrl     String         @map("result_image_url")
+  originalStorageKey String         @map("original_storage_key")
+  resultStorageKey   String         @map("result_storage_key")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  expiresAt          DateTime       @map("expires_at")
+  deletedAt          DateTime?      @map("deleted_at")
+  activationCode     ActivationCode @relation(fields: [activationCodeId], references: [id], onDelete: Cascade)
+
+  @@index([activationCodeId])
+  @@index([expiresAt, deletedAt])
+  @@map("processed_images")
+}

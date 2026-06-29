@@ -95,11 +95,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
   );
 
   useEffect(() => {
-    const stored = localStorage.getItem("activationCode");
-    if (stored) {
-      setCode(stored);
-      activate(stored, true);
-    }
+    refreshUsage();
     loadImage(sampleImage);
   }, [sampleImage]);
 
@@ -119,11 +115,27 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       if (!silent) notify(payload.error ?? "الكود غير صالح");
       return;
     }
-    localStorage.setItem("activationCode", payload.code.code);
     setUnlocked(true);
     setUsage(payload.code);
-    setCode(payload.code.code);
+    setCode("");
     if (!silent) notify("تم فتح المحرر وإضافة مرات الاستخدام");
+  }
+
+  async function refreshUsage() {
+    const response = await fetch("/api/usage");
+    if (!response.ok) return;
+    const payload = await response.json();
+    setUnlocked(true);
+    setUsage(payload);
+  }
+
+  async function logoutCode() {
+    await fetch("/api/activate/logout", { method: "POST" });
+    setUnlocked(false);
+    setUsage(null);
+    setCode("");
+    notify("تم تسجيل الخروج من الكود");
+    window.location.href = "/activate";
   }
 
   function getCanvas() {
@@ -168,7 +180,8 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
         body: JSON.stringify({ image: dataUrl })
       });
       const payload = await response.json();
-      setUploadedUrl(payload.url ?? "");
+      if (!response.ok) notify(payload.error ?? "تعذر التحقق من الصورة");
+      setUploadedUrl("");
       setStatus("idle");
       notify("تم رفع الصورة");
     };
@@ -339,7 +352,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           code,
-          originalUrl: uploadedUrl || imageUrl,
+          originalDataUrl: imageUrl,
           resultDataUrl: output
         })
       });
@@ -426,6 +439,11 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
               HD Quality
               <span className="block text-[10px] font-bold">حفظ بأعلى جودة</span>
             </button>
+            {unlocked ? (
+              <Button variant="outline" onClick={logoutCode} className="h-12">
+                تسجيل خروج من الكود
+              </Button>
+            ) : null}
           </div>
 
           <div className="grid gap-5 p-5 xl:grid-cols-2">
@@ -499,6 +517,9 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
             <div className="flex items-center gap-3 rounded-md border border-emerald-200 px-4 py-3 text-sm font-bold text-emerald-700">
               <BadgeCheck className="h-5 w-5" />
               {unlocked ? "تم تفعيل الأداة بنجاح" : "المحرر مقفل حتى إدخال كود صحيح"}
+            </div>
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">
+              يتم حفظ الصور لمدة 10 أيام فقط ثم تُحذف تلقائيًا.
             </div>
             <div className="flex flex-wrap gap-3">
               <Button variant="soft" onClick={detectLogos} disabled={locked || !unlocked}>

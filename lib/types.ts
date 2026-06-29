@@ -14,9 +14,15 @@ export type ActivationCode = {
 export type ProcessedImage = {
   id: string;
   activation_code_id: string;
-  original_url: string;
-  result_url: string;
+  original_image_url: string;
+  result_image_url: string;
+  original_url?: string;
+  result_url?: string;
+  original_storage_key?: string;
+  result_storage_key?: string;
   created_at: string;
+  expires_at: string;
+  deleted_at?: string | null;
 };
 
 export type PricingPlan = {
