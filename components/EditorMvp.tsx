@@ -48,6 +48,13 @@ type RemovalOptions = {
   preciseWatermark?: boolean;
 };
 
+type ImageBounds = {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+};
+
 export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const maskCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -517,8 +524,12 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
 
     const result = target.ctx.getImageData(0, 0, target.canvas.width, target.canvas.height);
     const mask = buildRemovalMask(target.canvas.width, target.canvas.height, targetSelection, options);
+    if (options.preciseWatermark) {
+      textureAwareWatermarkFill(result, mask, target.canvas.width, target.canvas.height);
+    }
     inpaintImage(result, mask, target.canvas.width, target.canvas.height);
     harmonizeInpaint(result, mask, target.canvas.width, target.canvas.height);
+    flattenMaskAlpha(result, mask, target.canvas.width, target.canvas.height);
     target.ctx.putImageData(result, 0, 0);
 
     const output = target.canvas.toDataURL("image/png");
@@ -564,7 +575,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       }
     }
 
-    return dilateMask(mask, width, height, options.preciseWatermark ? 4 : 3);
+    return dilateMask(mask, width, height, options.preciseWatermark ? 6 : 3);
   }
 
   function buildPreciseWatermarkMask(mask: Uint8Array, width: number, height: number, targetSelection: SelectionBox) {
@@ -610,6 +621,95 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       }
     }
     return out;
+  }
+
+  function getMaskBounds(mask: Uint8Array, width: number, height: number): ImageBounds | null {
+    let minX = width;
+    let minY = height;
+    let maxX = -1;
+    let maxY = -1;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (!mask[y * width + x]) continue;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    }
+    return maxX >= minX && maxY >= minY ? { minX, minY, maxX, maxY } : null;
+  }
+
+  function textureAwareWatermarkFill(image: ImageData, mask: Uint8Array, width: number, height: number) {
+    const bounds = getMaskBounds(mask, width, height);
+    if (!bounds) return;
+    const data = image.data;
+    const original = new Uint8ClampedArray(data);
+    const boxWidth = Math.max(8, bounds.maxX - bounds.minX + 1);
+    const candidates = [
+      { dx: -Math.max(6, Math.round(boxWidth * 1.15)), dy: 0 },
+      { dx: -Math.max(6, Math.round(boxWidth * 0.75)), dy: -Math.max(4, Math.round(boxWidth * 0.25)) },
+      { dx: 0, dy: -Math.max(6, Math.round(boxWidth * 0.75)) },
+      { dx: -Math.max(6, Math.round(boxWidth * 0.75)), dy: Math.max(4, Math.round(boxWidth * 0.25)) }
+    ];
+
+    for (let y = bounds.minY; y <= bounds.maxY; y++) {
+      for (let x = bounds.minX; x <= bounds.maxX; x++) {
+        const p = y * width + x;
+        if (!mask[p]) continue;
+        let best = -1;
+        let bestScore = Number.POSITIVE_INFINITY;
+        for (const candidate of candidates) {
+          const sx = Math.min(width - 1, Math.max(0, x + candidate.dx));
+          const sy = Math.min(height - 1, Math.max(0, y + candidate.dy));
+          const sp = sy * width + sx;
+          if (mask[sp]) continue;
+          const score = localPatchDifference(original, mask, width, height, x, y, sx, sy);
+          if (score < bestScore) {
+            bestScore = score;
+            best = sp;
+          }
+        }
+        if (best < 0) continue;
+        const i = p * 4;
+        const si = best * 4;
+        data[i] = original[si];
+        data[i + 1] = original[si + 1];
+        data[i + 2] = original[si + 2];
+        data[i + 3] = 255;
+      }
+    }
+  }
+
+  function localPatchDifference(data: Uint8ClampedArray, mask: Uint8Array, width: number, height: number, tx: number, ty: number, sx: number, sy: number) {
+    let diff = 0;
+    let count = 0;
+    for (let dy = -3; dy <= 3; dy++) {
+      for (let dx = -3; dx <= 3; dx++) {
+        const ax = tx + dx;
+        const ay = ty + dy;
+        const bx = sx + dx;
+        const by = sy + dy;
+        if (ax < 0 || ax >= width || ay < 0 || ay >= height || bx < 0 || bx >= width || by < 0 || by >= height) continue;
+        const ap = ay * width + ax;
+        const bp = by * width + bx;
+        if (mask[ap] || mask[bp]) continue;
+        const ai = ap * 4;
+        const bi = bp * 4;
+        diff += Math.abs(data[ai] - data[bi]) + Math.abs(data[ai + 1] - data[bi + 1]) + Math.abs(data[ai + 2] - data[bi + 2]);
+        count += 1;
+      }
+    }
+    return count ? diff / count : Number.POSITIVE_INFINITY;
+  }
+
+  function flattenMaskAlpha(image: ImageData, mask: Uint8Array, width: number, height: number) {
+    const data = image.data;
+    const refined = dilateMask(mask, width, height, 1);
+    for (let i = 0; i < refined.length; i++) {
+      if (!refined[i]) continue;
+      data[i * 4 + 3] = 255;
+    }
   }
 
   function inpaintImage(image: ImageData, rawMask: Uint8Array, width: number, height: number) {
