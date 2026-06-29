@@ -374,7 +374,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     link.click();
   }
 
-  const usageLabel = usage ? `${usage.remaining_uses} من ${usage.total_uses} استخدام` : "18 من 20 استخدام";
+  const usageLabel = usage ? `${usage.remaining_uses} من ${usage.total_uses} استخدام` : "0 من 0 استخدام";
 
   return (
     <div className="relative">
