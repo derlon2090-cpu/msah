@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentCodeSession } from "@/lib/code-auth";
 import { createProcessedImageAfterSuccess } from "@/lib/images";
+import { isStorageConfigured } from "@/lib/storage";
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
@@ -13,7 +14,17 @@ export async function POST(request: Request) {
 
   const session = await getCurrentCodeSession();
   if (!session) {
-    return NextResponse.json({ error: "كود التفعيل غير صالح أو لا توجد مرات استخدام متبقية" }, { status: 403 });
+    return NextResponse.json(
+      { error: "كود التفعيل غير صالح أو لا توجد مرات استخدام متبقية" },
+      { status: 403 }
+    );
+  }
+
+  if (!isStorageConfigured()) {
+    return NextResponse.json(
+      { error: "إعدادات تخزين الصور غير مكتملة في Vercel. أضف متغيرات R2/S3 ثم أعد النشر." },
+      { status: 500 }
+    );
   }
 
   try {

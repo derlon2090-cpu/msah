@@ -361,9 +361,9 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       setUsage(payload.usage);
       setStatus("done");
       notify("تمت إزالة العنصر مع حفظ الصورة");
-    } catch {
+    } catch (error) {
       setStatus("failed");
-      notify("فشل، حاول مرة أخرى");
+      notify(error instanceof Error ? error.message : "فشل، حاول مرة أخرى");
     }
   }
 

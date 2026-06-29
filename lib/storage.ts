@@ -9,6 +9,16 @@ function requiredEnv(name: string) {
   return value;
 }
 
+export function isStorageConfigured() {
+  return Boolean(
+    process.env.S3_ENDPOINT &&
+      process.env.S3_BUCKET &&
+      process.env.S3_ACCESS_KEY_ID &&
+      process.env.S3_SECRET_ACCESS_KEY &&
+      process.env.S3_PUBLIC_BASE_URL
+  );
+}
+
 function getClient() {
   return new S3Client({
     endpoint: requiredEnv("S3_ENDPOINT"),
