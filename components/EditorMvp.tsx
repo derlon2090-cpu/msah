@@ -37,6 +37,7 @@ type Usage = {
 
 export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const maskCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [code, setCode] = useState("");
@@ -49,7 +50,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
   const [resultUrl, setResultUrl] = useState("");
   const [uploadedUrl, setUploadedUrl] = useState("");
   const [showAfter, setShowAfter] = useState(false);
-  const [selection, setSelection] = useState({ x: 42, y: 29, w: 20, h: 31 });
+  const [selection, setSelection] = useState({ x: 88, y: 86, w: 8, h: 8 });
   const [isDrawing, setIsDrawing] = useState(false);
   const [history, setHistory] = useState<string[]>([]);
   const [future, setFuture] = useState<string[]>([]);
@@ -145,6 +146,21 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     return { canvas, ctx };
   }
 
+  function getMaskCanvas() {
+    const canvas = maskCanvasRef.current;
+    const ctx = canvas?.getContext("2d", { willReadFrequently: true });
+    if (!canvas || !ctx) return null;
+    return { canvas, ctx };
+  }
+
+  function syncMaskCanvas(width: number, height: number) {
+    const mask = getMaskCanvas();
+    if (!mask) return;
+    mask.canvas.width = width;
+    mask.canvas.height = height;
+    mask.ctx.clearRect(0, 0, width, height);
+  }
+
   function loadImage(src: string) {
     const img = new Image();
     img.onload = () => {
@@ -155,6 +171,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       const scale = Math.min(1, maxWidth / img.naturalWidth);
       target.canvas.width = Math.round(img.naturalWidth * scale);
       target.canvas.height = Math.round(img.naturalHeight * scale);
+      syncMaskCanvas(target.canvas.width, target.canvas.height);
       target.ctx.clearRect(0, 0, target.canvas.width, target.canvas.height);
       target.ctx.drawImage(img, 0, 0, target.canvas.width, target.canvas.height);
       setHistory([target.canvas.toDataURL("image/png")]);
@@ -193,6 +210,12 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     if (!current) return;
     setHistory((items) => [...items, current].slice(-20));
     setFuture([]);
+  }
+
+  function clearMask() {
+    const mask = getMaskCanvas();
+    if (!mask) return;
+    mask.ctx.clearRect(0, 0, mask.canvas.width, mask.canvas.height);
   }
 
   function undo() {
@@ -253,35 +276,81 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
 
   function paint(event: MouseEvent<HTMLCanvasElement>, erase: boolean) {
     const target = getCanvas();
-    if (!target) return;
+    const mask = getMaskCanvas();
+    if (!target || !mask) return;
     const rect = target.canvas.getBoundingClientRect();
-    const x = ((event.clientX - rect.left) / rect.width) * target.canvas.width;
-    const y = ((event.clientY - rect.top) / rect.height) * target.canvas.height;
-    target.ctx.save();
-    target.ctx.globalAlpha = erase ? 0.7 : 0.32;
-    target.ctx.fillStyle = erase ? "#ffffff" : "#2563eb";
-    target.ctx.beginPath();
-    target.ctx.arc(x, y, erase ? 22 : 28, 0, Math.PI * 2);
-    target.ctx.fill();
-    target.ctx.restore();
+    const x = ((event.clientX - rect.left) / rect.width) * mask.canvas.width;
+    const y = ((event.clientY - rect.top) / rect.height) * mask.canvas.height;
+    mask.ctx.save();
+    mask.ctx.globalCompositeOperation = erase ? "destination-out" : "source-over";
+    mask.ctx.fillStyle = "rgba(124, 58, 237, 0.62)";
+    mask.ctx.beginPath();
+    mask.ctx.arc(x, y, erase ? 24 : 34, 0, Math.PI * 2);
+    mask.ctx.fill();
+    mask.ctx.restore();
   }
 
   async function detectLogos() {
     if (locked || !unlocked) return;
     setStatus("analyzing");
-    const response = await fetch("/api/detect-logos", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ imageUrl: uploadedUrl || imageUrl })
-    });
-    const payload = await response.json();
-    setDetections(payload.boxes ?? []);
-    if (payload.boxes?.[0]) {
-      const first = payload.boxes[0];
-      setSelection({ x: first.x, y: first.y, w: first.width, h: first.height });
-    }
+    const boxes = detectWatermarkCandidates();
+    setDetections(boxes);
+    if (boxes[0]) setSelection({ x: boxes[0].x, y: boxes[0].y, w: boxes[0].width, h: boxes[0].height });
     setStatus("idle");
-    notify("تم التعرف على الشعار تلقائيا");
+    notify(boxes.length ? "تم تحديد علامة مائية مقترحة" : "لم يظهر شعار واضح، حدد المنطقة بالفرشاة");
+  }
+
+  function detectWatermarkCandidates(): DetectionBox[] {
+    const target = getCanvas();
+    if (!target) return [];
+    const { canvas, ctx } = target;
+    const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = image.data;
+    const candidates = [
+      { id: "bottom-right", label: "علامة مائية أسفل اليمين", x: 84, y: 82, width: 14, height: 14 },
+      { id: "bottom-left", label: "علامة مائية أسفل اليسار", x: 2, y: 82, width: 14, height: 14 },
+      { id: "top-right", label: "شعار أعلى اليمين", x: 84, y: 2, width: 14, height: 14 },
+      { id: "top-left", label: "شعار أعلى اليسار", x: 2, y: 2, width: 14, height: 14 }
+    ];
+
+    const scored = candidates
+      .map((box) => {
+        const sx = Math.floor((box.x / 100) * canvas.width);
+        const sy = Math.floor((box.y / 100) * canvas.height);
+        const ex = Math.min(canvas.width, Math.floor(((box.x + box.width) / 100) * canvas.width));
+        const ey = Math.min(canvas.height, Math.floor(((box.y + box.height) / 100) * canvas.height));
+        let bright = 0;
+        let contrast = 0;
+        let count = 0;
+        for (let y = sy + 1; y < ey - 1; y += 2) {
+          for (let x = sx + 1; x < ex - 1; x += 2) {
+            const i = (y * canvas.width + x) * 4;
+            const l = (data[i] + data[i + 1] + data[i + 2]) / 3;
+            const j = (y * canvas.width + x + 1) * 4;
+            const l2 = (data[j] + data[j + 1] + data[j + 2]) / 3;
+            if (l > 190) bright += 1;
+            contrast += Math.abs(l - l2);
+            count += 1;
+          }
+        }
+        return { ...box, score: count ? bright / count + contrast / count / 80 : 0 };
+      })
+      .sort((a, b) => b.score - a.score);
+
+    const best = scored[0];
+    const fallback = best.score < 0.18 ? scored.find((item) => item.id === "bottom-right") ?? best : best;
+    return [
+      {
+        id: fallback.id,
+        label: fallback.label,
+        confidence: Math.min(0.98, Math.max(0.72, fallback.score)),
+        x: fallback.x,
+        y: fallback.y,
+        width: fallback.width,
+        height: fallback.height,
+        accepted: true
+      }
+    ];
   }
 
   function acceptDetection(id: string, accepted: boolean) {
@@ -299,44 +368,167 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     target.canvas.height = img.naturalHeight;
     target.ctx.drawImage(img, 0, 0, target.canvas.width, target.canvas.height);
 
-    const sx = Math.max(0, Math.round((selection.x / 100) * target.canvas.width));
-    const sy = Math.max(0, Math.round((selection.y / 100) * target.canvas.height));
-    const sw = Math.max(12, Math.round((selection.w / 100) * target.canvas.width));
-    const sh = Math.max(12, Math.round((selection.h / 100) * target.canvas.height));
-    const feather = Math.max(12, Math.round(Math.min(sw, sh) * 0.12));
-
-    const sample = target.ctx.getImageData(Math.max(0, sx - 8), sy, 1, Math.min(sh, target.canvas.height - sy)).data;
-    let r = 0;
-    let g = 0;
-    let b = 0;
-    let count = 0;
-    for (let i = 0; i < sample.length; i += 4) {
-      r += sample[i];
-      g += sample[i + 1];
-      b += sample[i + 2];
-      count += 1;
-    }
-    const fill = `rgb(${Math.round(r / count)}, ${Math.round(g / count)}, ${Math.round(b / count)})`;
-
-    target.ctx.save();
-    target.ctx.filter = `blur(${Math.round(feather / 2)}px)`;
-    target.ctx.drawImage(target.canvas, Math.max(0, sx - feather), Math.max(0, sy - feather), sw + feather * 2, sh + feather * 2, sx, sy, sw, sh);
-    target.ctx.filter = "none";
-    const gradient = target.ctx.createLinearGradient(sx, sy, sx + sw, sy + sh);
-    gradient.addColorStop(0, fill);
-    gradient.addColorStop(0.5, "rgba(255,255,255,0.08)");
-    gradient.addColorStop(1, fill);
-    target.ctx.globalAlpha = 0.82;
-    target.ctx.fillStyle = gradient;
-    target.ctx.fillRect(sx, sy, sw, sh);
-    target.ctx.globalAlpha = 1;
-    target.ctx.restore();
+    const result = target.ctx.getImageData(0, 0, target.canvas.width, target.canvas.height);
+    const mask = buildRemovalMask(target.canvas.width, target.canvas.height);
+    inpaintImage(result, mask, target.canvas.width, target.canvas.height);
+    target.ctx.putImageData(result, 0, 0);
 
     const sourceType = imageUrl.startsWith("data:image/jpeg") ? "image/jpeg" : "image/png";
     const output = target.canvas.toDataURL(sourceType, sourceType === "image/jpeg" ? 0.96 : undefined);
     setResultUrl(output);
     setShowAfter(true);
+    clearMask();
     return output;
+  }
+
+  function buildRemovalMask(width: number, height: number) {
+    const mask = new Uint8Array(width * height);
+    const maskCanvas = getMaskCanvas();
+    let hasBrushMask = false;
+    if (maskCanvas && maskCanvas.canvas.width && maskCanvas.canvas.height) {
+      const data = maskCanvas.ctx.getImageData(0, 0, maskCanvas.canvas.width, maskCanvas.canvas.height).data;
+      for (let y = 0; y < height; y++) {
+        const my = Math.min(maskCanvas.canvas.height - 1, Math.floor((y / height) * maskCanvas.canvas.height));
+        for (let x = 0; x < width; x++) {
+          const mx = Math.min(maskCanvas.canvas.width - 1, Math.floor((x / width) * maskCanvas.canvas.width));
+          const alpha = data[(my * maskCanvas.canvas.width + mx) * 4 + 3];
+          if (alpha > 20) {
+            mask[y * width + x] = 1;
+            hasBrushMask = true;
+          }
+        }
+      }
+    }
+
+    if (!hasBrushMask) {
+      const sx = Math.max(0, Math.round((selection.x / 100) * width));
+      const sy = Math.max(0, Math.round((selection.y / 100) * height));
+      const sw = Math.max(8, Math.round((selection.w / 100) * width));
+      const sh = Math.max(8, Math.round((selection.h / 100) * height));
+      const pad = Math.max(4, Math.round(Math.min(sw, sh) * 0.2));
+      for (let y = Math.max(0, sy - pad); y < Math.min(height, sy + sh + pad); y++) {
+        for (let x = Math.max(0, sx - pad); x < Math.min(width, sx + sw + pad); x++) {
+          mask[y * width + x] = 1;
+        }
+      }
+    }
+
+    return dilateMask(mask, width, height, 3);
+  }
+
+  function dilateMask(mask: Uint8Array, width: number, height: number, radius: number) {
+    const out = new Uint8Array(mask);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (!mask[y * width + x]) continue;
+        for (let dy = -radius; dy <= radius; dy++) {
+          for (let dx = -radius; dx <= radius; dx++) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx >= 0 && nx < width && ny >= 0 && ny < height) out[ny * width + nx] = 1;
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  function inpaintImage(image: ImageData, rawMask: Uint8Array, width: number, height: number) {
+    const data = image.data;
+    let mask = new Uint8Array(rawMask);
+    const originalMask = new Uint8Array(rawMask);
+    let minX = width;
+    let minY = height;
+    let maxX = 0;
+    let maxY = 0;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (!mask[y * width + x]) continue;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    }
+    if (minX > maxX || minY > maxY) return;
+    const bounds = {
+      minX: Math.max(1, minX - 8),
+      minY: Math.max(1, minY - 8),
+      maxX: Math.min(width - 2, maxX + 8),
+      maxY: Math.min(height - 2, maxY + 8)
+    };
+    const maxPasses = Math.min(220, Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY) + 12);
+
+    for (let pass = 0; pass < maxPasses; pass++) {
+      let changed = 0;
+      const nextMask = new Uint8Array(mask);
+      const nextData = new Uint8ClampedArray(data);
+      for (let y = bounds.minY; y <= bounds.maxY; y++) {
+        for (let x = bounds.minX; x <= bounds.maxX; x++) {
+          const p = y * width + x;
+          if (!mask[p]) continue;
+          let r = 0;
+          let g = 0;
+          let b = 0;
+          let total = 0;
+          for (let dy = -2; dy <= 2; dy++) {
+            for (let dx = -2; dx <= 2; dx++) {
+              if (dx === 0 && dy === 0) continue;
+              const nx = x + dx;
+              const ny = y + dy;
+              if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+              const np = ny * width + nx;
+              if (mask[np]) continue;
+              const weight = 1 / Math.max(1, Math.abs(dx) + Math.abs(dy));
+              const i = np * 4;
+              r += data[i] * weight;
+              g += data[i + 1] * weight;
+              b += data[i + 2] * weight;
+              total += weight;
+            }
+          }
+          if (total > 0) {
+            const i = p * 4;
+            nextData[i] = r / total;
+            nextData[i + 1] = g / total;
+            nextData[i + 2] = b / total;
+            nextData[i + 3] = 255;
+            nextMask[p] = 0;
+            changed += 1;
+          }
+        }
+      }
+      data.set(nextData);
+      mask = nextMask;
+      if (!changed) break;
+    }
+
+    for (let pass = 0; pass < 3; pass++) {
+      const copy = new Uint8ClampedArray(data);
+      for (let y = bounds.minY; y <= bounds.maxY; y++) {
+        for (let x = bounds.minX; x <= bounds.maxX; x++) {
+          const p = y * width + x;
+          if (!originalMask[p]) continue;
+          let r = 0;
+          let g = 0;
+          let b = 0;
+          let total = 0;
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              const i = ((y + dy) * width + (x + dx)) * 4;
+              r += copy[i];
+              g += copy[i + 1];
+              b += copy[i + 2];
+              total += 1;
+            }
+          }
+          const i = p * 4;
+          data[i] = r / total;
+          data[i + 1] = g / total;
+          data[i + 2] = b / total;
+        }
+      }
+    }
   }
 
   async function removeObject() {
@@ -346,13 +538,16 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     }
     setStatus("removing");
     try {
+      const originalForSave = /^data:image\/(png|jpe?g|webp);base64,/.test(imageUrl)
+        ? imageUrl
+        : getCanvas()?.canvas.toDataURL("image/png") ?? imageUrl;
       const output = makeResult();
       const response = await fetch("/api/remove-object", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           code,
-          originalDataUrl: imageUrl,
+          originalDataUrl: originalForSave,
           resultDataUrl: output
         })
       });
@@ -458,6 +653,11 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
                   onMouseMove={onCanvasMove}
                   onMouseUp={onCanvasUp}
                   onMouseLeave={onCanvasUp}
+                />
+                <canvas
+                  ref={maskCanvasRef}
+                  className="pointer-events-none absolute inset-0 h-full w-full object-contain mix-blend-multiply"
+                  style={{ transform: `scale(${zoom})`, transformOrigin: "center" }}
                 />
                 <div
                   className="pointer-events-none absolute border-2 border-dashed border-blue-600"
