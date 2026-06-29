@@ -51,7 +51,6 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragStart, setDragStart] = useState<{ x: number; y: number; panX: number; panY: number } | null>(null);
   const [brushSize, setBrushSize] = useState(34);
-  const [autoRemoveWatermark, setAutoRemoveWatermark] = useState(false);
   const [imageUrl, setImageUrl] = useState("");
   const [resultUrl, setResultUrl] = useState("");
   const [uploadedUrl, setUploadedUrl] = useState("");
@@ -210,9 +209,6 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       await loadImage(dataUrl);
       const detectedSelection = detectWatermarkSelection();
       setSelection(detectedSelection);
-      if (autoRemoveWatermark && unlocked) {
-        window.setTimeout(() => void removeObject(detectedSelection), 120);
-      }
       const response = await fetch("/api/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -677,6 +673,18 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     }
   }
 
+  async function removeWatermark() {
+    if (!imageUrl) {
+      notify("ارفع صورة أولا");
+      return;
+    }
+    setStatus("analyzing");
+    const detectedSelection = detectWatermarkSelection();
+    setSelection(detectedSelection);
+    setStatus("removing");
+    await removeObject(detectedSelection);
+  }
+
   function downloadResult() {
     const link = document.createElement("a");
     link.href = resultUrl || imageUrl;
@@ -716,15 +724,19 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
               <ImageOff className="h-5 w-5" />
               إزالة الصورة
             </Button>
-            <label className="flex h-12 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-black text-slate-700">
+            <label className="hidden">
               <input
                 type="checkbox"
-                checked={autoRemoveWatermark}
-                onChange={(event) => setAutoRemoveWatermark(event.target.checked)}
+                checked={false}
+                readOnly
                 className="h-4 w-4 accent-violet-600"
               />
               إزالة العلامة بعد الرفع
             </label>
+            <Button variant="soft" onClick={() => void removeWatermark()} disabled={locked || !unlocked || !imageUrl || status === "removing"} className="h-12">
+              <WandSparkles className="h-5 w-5" />
+              إزالة العلامة المائية
+            </Button>
             <div className={cn("flex h-12 items-center gap-3 border-r border-slate-200 pr-4", unlocked && "text-emerald-700")}>
               {unlocked ? <LockOpen className="h-6 w-6" /> : <Lock className="h-6 w-6" />}
               <span className="text-xs font-bold">{unlocked ? "مفتوح" : "مقفل"}</span>
@@ -842,7 +854,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
               <div className="aspect-[920/492] w-full">
                 {showAfter && resultUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={resultUrl} alt="بعد الإزالة" className="h-full w-full object-cover" />
+                  <img src={resultUrl} alt="بعد الإزالة" className="h-full w-full object-contain" />
                 ) : (
                   <div className="flex h-full items-center justify-center text-center text-sm font-bold text-slate-400">
                     تظهر المقارنة بعد إزالة العنصر
