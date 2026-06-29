@@ -459,7 +459,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
             const l2 = (data[j] + data[j + 1] + data[j + 2]) / 3;
             const edge = Math.abs(l - l2);
             if (l > 190) bright += 1;
-            if ((l > 165 && saturation < 58) || l > 218 || edge > 36) {
+            if ((l > 168 && saturation < 54) || l > 224) {
               minX = Math.min(minX, x);
               minY = Math.min(minY, y);
               maxX = Math.max(maxX, x);
@@ -518,6 +518,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     const result = target.ctx.getImageData(0, 0, target.canvas.width, target.canvas.height);
     const mask = buildRemovalMask(target.canvas.width, target.canvas.height, targetSelection, options);
     inpaintImage(result, mask, target.canvas.width, target.canvas.height);
+    harmonizeInpaint(result, mask, target.canvas.width, target.canvas.height);
     target.ctx.putImageData(result, 0, 0);
 
     const sourceType = imageUrl.startsWith("data:image/jpeg") ? "image/jpeg" : "image/png";
@@ -585,16 +586,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
         const b = data[i + 2];
         const l = (r + g + b) / 3;
         const saturation = Math.max(r, g, b) - Math.min(r, g, b);
-        let edge = 0;
-        if (x > 0 && x < width - 1 && y > 0 && y < height - 1) {
-          const right = ((y * width + x + 1) * 4);
-          const down = (((y + 1) * width + x) * 4);
-          edge = Math.max(
-            Math.abs(l - (data[right] + data[right + 1] + data[right + 2]) / 3),
-            Math.abs(l - (data[down] + data[down + 1] + data[down + 2]) / 3)
-          );
-        }
-        if ((l > 172 && saturation < 62) || l > 222 || (l > 135 && edge > 38)) {
+        if ((l > 170 && saturation < 56) || l > 226) {
           mask[y * width + x] = 1;
           hits += 1;
         }
@@ -715,6 +707,47 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
           data[i + 1] = g / total;
           data[i + 2] = b / total;
         }
+      }
+    }
+  }
+
+  function harmonizeInpaint(image: ImageData, rawMask: Uint8Array, width: number, height: number) {
+    const data = image.data;
+    const original = new Uint8ClampedArray(data);
+    const refined = dilateMask(rawMask, width, height, 1);
+
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        const p = y * width + x;
+        if (!refined[p]) continue;
+
+        let r = 0;
+        let g = 0;
+        let b = 0;
+        let total = 0;
+        for (let dy = -4; dy <= 4; dy++) {
+          for (let dx = -4; dx <= 4; dx++) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+            const np = ny * width + nx;
+            if (rawMask[np]) continue;
+            const distance = Math.max(1, Math.abs(dx) + Math.abs(dy));
+            const weight = 1 / distance;
+            const i = np * 4;
+            r += original[i] * weight;
+            g += original[i + 1] * weight;
+            b += original[i + 2] * weight;
+            total += weight;
+          }
+        }
+
+        if (total <= 0) continue;
+        const i = p * 4;
+        const blend = rawMask[p] ? 0.28 : 0.18;
+        data[i] = data[i] * (1 - blend) + (r / total) * blend;
+        data[i + 1] = data[i + 1] * (1 - blend) + (g / total) * blend;
+        data[i + 2] = data[i + 2] * (1 - blend) + (b / total) * blend;
       }
     }
   }
