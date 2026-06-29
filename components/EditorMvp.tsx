@@ -37,6 +37,17 @@ type Usage = {
   remaining_uses: number;
 };
 
+type SelectionBox = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
+type RemovalOptions = {
+  preciseWatermark?: boolean;
+};
+
 export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const maskCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -432,18 +443,44 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
         let bright = 0;
         let contrast = 0;
         let count = 0;
+        let minX = ex;
+        let minY = ey;
+        let maxX = sx;
+        let maxY = sy;
         for (let y = sy + 1; y < ey - 1; y += 2) {
           for (let x = sx + 1; x < ex - 1; x += 2) {
             const i = (y * canvas.width + x) * 4;
-            const l = (data[i] + data[i + 1] + data[i + 2]) / 3;
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+            const l = (r + g + b) / 3;
+            const saturation = Math.max(r, g, b) - Math.min(r, g, b);
             const j = (y * canvas.width + x + 1) * 4;
             const l2 = (data[j] + data[j + 1] + data[j + 2]) / 3;
+            const edge = Math.abs(l - l2);
             if (l > 190) bright += 1;
-            contrast += Math.abs(l - l2);
+            if ((l > 165 && saturation < 58) || l > 218 || edge > 36) {
+              minX = Math.min(minX, x);
+              minY = Math.min(minY, y);
+              maxX = Math.max(maxX, x);
+              maxY = Math.max(maxY, y);
+            }
+            contrast += edge;
             count += 1;
           }
         }
-        return { ...box, score: count ? bright / count + contrast / count / 80 : 0 };
+        const hasBounds = minX < maxX && minY < maxY;
+        const padX = Math.round(canvas.width * 0.012);
+        const padY = Math.round(canvas.height * 0.012);
+        const refined = hasBounds
+          ? {
+              x: Math.max(0, ((minX - padX) / canvas.width) * 100),
+              y: Math.max(0, ((minY - padY) / canvas.height) * 100),
+              width: Math.min(100, ((maxX - minX + padX * 2) / canvas.width) * 100),
+              height: Math.min(100, ((maxY - minY + padY * 2) / canvas.height) * 100)
+            }
+          : box;
+        return { ...box, ...refined, score: count ? bright / count + contrast / count / 80 : 0 };
       })
       .sort((a, b) => b.score - a.score);
 
@@ -469,7 +506,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     if (selected && accepted) setSelection({ x: selected.x, y: selected.y, w: selected.width, h: selected.height });
   }
 
-  function makeResult(targetSelection = selection) {
+  function makeResult(targetSelection: SelectionBox = selection, options: RemovalOptions = {}) {
     const target = getCanvas();
     const img = imageRef.current;
     if (!target || !img) return "";
@@ -479,7 +516,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     target.ctx.drawImage(img, 0, 0, target.canvas.width, target.canvas.height);
 
     const result = target.ctx.getImageData(0, 0, target.canvas.width, target.canvas.height);
-    const mask = buildRemovalMask(target.canvas.width, target.canvas.height, targetSelection);
+    const mask = buildRemovalMask(target.canvas.width, target.canvas.height, targetSelection, options);
     inpaintImage(result, mask, target.canvas.width, target.canvas.height);
     target.ctx.putImageData(result, 0, 0);
 
@@ -491,7 +528,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     return output;
   }
 
-  function buildRemovalMask(width: number, height: number, targetSelection = selection) {
+  function buildRemovalMask(width: number, height: number, targetSelection: SelectionBox = selection, options: RemovalOptions = {}) {
     const mask = new Uint8Array(width * height);
     const maskCanvas = getMaskCanvas();
     let hasBrushMask = false;
@@ -510,6 +547,10 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       }
     }
 
+    if (!hasBrushMask && options.preciseWatermark) {
+      hasBrushMask = buildPreciseWatermarkMask(mask, width, height, targetSelection);
+    }
+
     if (!hasBrushMask) {
       const sx = Math.max(0, Math.round((targetSelection.x / 100) * width));
       const sy = Math.max(0, Math.round((targetSelection.y / 100) * height));
@@ -523,7 +564,44 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       }
     }
 
-    return dilateMask(mask, width, height, 3);
+    return dilateMask(mask, width, height, options.preciseWatermark ? 2 : 3);
+  }
+
+  function buildPreciseWatermarkMask(mask: Uint8Array, width: number, height: number, targetSelection: SelectionBox) {
+    const target = getCanvas();
+    if (!target) return false;
+    const data = target.ctx.getImageData(0, 0, width, height).data;
+    const sx = Math.max(0, Math.round((targetSelection.x / 100) * width));
+    const sy = Math.max(0, Math.round((targetSelection.y / 100) * height));
+    const ex = Math.min(width, Math.round(((targetSelection.x + targetSelection.w) / 100) * width));
+    const ey = Math.min(height, Math.round(((targetSelection.y + targetSelection.h) / 100) * height));
+    let hits = 0;
+
+    for (let y = sy; y < ey; y++) {
+      for (let x = sx; x < ex; x++) {
+        const i = (y * width + x) * 4;
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        const l = (r + g + b) / 3;
+        const saturation = Math.max(r, g, b) - Math.min(r, g, b);
+        let edge = 0;
+        if (x > 0 && x < width - 1 && y > 0 && y < height - 1) {
+          const right = ((y * width + x + 1) * 4);
+          const down = (((y + 1) * width + x) * 4);
+          edge = Math.max(
+            Math.abs(l - (data[right] + data[right + 1] + data[right + 2]) / 3),
+            Math.abs(l - (data[down] + data[down + 1] + data[down + 2]) / 3)
+          );
+        }
+        if ((l > 172 && saturation < 62) || l > 222 || (l > 135 && edge > 38)) {
+          mask[y * width + x] = 1;
+          hits += 1;
+        }
+      }
+    }
+
+    return hits > 12;
   }
 
   function dilateMask(mask: Uint8Array, width: number, height: number, radius: number) {
@@ -641,7 +719,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     }
   }
 
-  async function removeObject(targetSelection = selection) {
+  async function removeObject(targetSelection: SelectionBox = selection, options: RemovalOptions = {}) {
     if (!unlocked || locked) {
       notify("أدخل كود التفعيل أولا");
       return;
@@ -651,7 +729,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       const originalForSave = /^data:image\/(png|jpe?g|webp);base64,/.test(imageUrl)
         ? imageUrl
         : getCanvas()?.canvas.toDataURL("image/png") ?? imageUrl;
-      const output = makeResult(targetSelection);
+      const output = makeResult(targetSelection, options);
       const response = await fetch("/api/remove-object", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -682,7 +760,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     const detectedSelection = detectWatermarkSelection();
     setSelection(detectedSelection);
     setStatus("removing");
-    await removeObject(detectedSelection);
+    await removeObject(detectedSelection, { preciseWatermark: true });
   }
 
   function downloadResult() {
@@ -704,6 +782,9 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     transform: canvasTransform,
     transformOrigin: "center"
   };
+  const imageAspect = imageRef.current
+    ? `${imageRef.current.naturalWidth} / ${imageRef.current.naturalHeight}`
+    : "920 / 492";
 
   return (
     <div className="relative">
@@ -811,7 +892,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
           <div className="grid gap-5 p-5 xl:grid-cols-2">
             <div className="relative overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
               <span className="absolute right-4 top-4 z-10 rounded-md bg-slate-900/60 px-3 py-2 text-sm font-bold text-white">الصورة الأصلية</span>
-              <div className="relative mx-auto aspect-[920/492] w-full overflow-hidden">
+              <div className="relative mx-auto w-full overflow-hidden" style={{ aspectRatio: imageAspect }}>
                 <canvas
                   ref={canvasRef}
                   className={cn("h-full w-full object-contain", tool === "move" ? "cursor-grab" : "cursor-crosshair")}
@@ -851,7 +932,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
             </div>
             <div className="relative overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
               <span className="absolute right-4 top-4 z-10 rounded-md bg-slate-900/60 px-3 py-2 text-sm font-bold text-white">بعد الإزالة</span>
-              <div className="aspect-[920/492] w-full">
+              <div className="w-full" style={{ aspectRatio: imageAspect }}>
                 {showAfter && resultUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={resultUrl} alt="بعد الإزالة" className="h-full w-full object-contain" />
