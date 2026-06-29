@@ -425,7 +425,16 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     const boxes = detectWatermarkCandidates();
     const box = boxes[0];
     if (box) return { x: box.x, y: box.y, w: box.width, h: box.height };
-    return { x: 84, y: 82, w: 14, h: 14 };
+    return { x: 80, y: 76, w: 18, h: 20 };
+  }
+
+  function expandSelectionBox(box: SelectionBox, amount: number): SelectionBox {
+    return {
+      x: Math.max(0, box.x - amount),
+      y: Math.max(0, box.y - amount),
+      w: Math.min(100 - Math.max(0, box.x - amount), box.w + amount * 2),
+      h: Math.min(100 - Math.max(0, box.y - amount), box.h + amount * 2)
+    };
   }
 
   function detectWatermarkCandidates(): DetectionBox[] {
@@ -605,14 +614,22 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
         const b = data[i + 2];
         const l = (r + g + b) / 3;
         const saturation = Math.max(r, g, b) - Math.min(r, g, b);
-        if ((l > 170 && saturation < 56) || l > 226) {
+        if ((l > 138 && saturation < 86) || l > 212) {
           mask[y * width + x] = 1;
           hits += 1;
         }
       }
     }
 
-    return hits > 12;
+    if (hits > 12) return true;
+
+    const fallbackPad = Math.max(4, Math.round(Math.min(ex - sx, ey - sy) * 0.18));
+    for (let y = Math.max(0, sy - fallbackPad); y < Math.min(height, ey + fallbackPad); y++) {
+      for (let x = Math.max(0, sx - fallbackPad); x < Math.min(width, ex + fallbackPad); x++) {
+        mask[y * width + x] = 1;
+      }
+    }
+    return true;
   }
 
   function dilateMask(mask: Uint8Array, width: number, height: number, radius: number) {
@@ -942,7 +959,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       return;
     }
     setStatus("analyzing");
-    const detectedSelection = detectWatermarkSelection();
+    const detectedSelection = expandSelectionBox(detectWatermarkSelection(), 2.5);
     setSelection(detectedSelection);
     setStatus("removing");
     await removeObject(detectedSelection, { preciseWatermark: true });
