@@ -46,6 +46,7 @@ type SelectionBox = {
 
 type RemovalOptions = {
   preciseWatermark?: boolean;
+  ignoreBrushMask?: boolean;
 };
 
 type ImageBounds = {
@@ -437,6 +438,100 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     };
   }
 
+  function findBrightLogoCandidate(data: Uint8ClampedArray, width: number, height: number) {
+    const totalPixels = width * height;
+    const bright = new Uint8Array(totalPixels);
+    const visited = new Uint8Array(totalPixels);
+    const minSide = Math.min(width, height);
+    const minDim = Math.max(7, Math.round(minSide * 0.012));
+    const maxDim = Math.max(32, Math.round(minSide * 0.17));
+    const minArea = Math.max(10, Math.round(totalPixels * 0.00004));
+    const maxArea = Math.max(160, Math.round(totalPixels * 0.018));
+
+    for (let p = 0; p < totalPixels; p++) {
+      const i = p * 4;
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const l = (r + g + b) / 3;
+      const saturation = Math.max(r, g, b) - Math.min(r, g, b);
+      if ((l > 166 && saturation < 92) || l > 224) bright[p] = 1;
+    }
+
+    let best: { x: number; y: number; width: number; height: number; score: number } | null = null;
+    const queue = new Int32Array(totalPixels);
+
+    for (let start = 0; start < totalPixels; start++) {
+      if (!bright[start] || visited[start]) continue;
+      let head = 0;
+      let tail = 0;
+      let area = 0;
+      let minX = width;
+      let minY = height;
+      let maxX = 0;
+      let maxY = 0;
+      visited[start] = 1;
+      queue[tail++] = start;
+
+      while (head < tail) {
+        const p = queue[head++];
+        const x = p % width;
+        const y = Math.floor(p / width);
+        area += 1;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+
+        const neighbors = [p - 1, p + 1, p - width, p + width];
+        for (const np of neighbors) {
+          if (np < 0 || np >= totalPixels || visited[np] || !bright[np]) continue;
+          const nx = np % width;
+          if (Math.abs(nx - x) > 1) continue;
+          visited[np] = 1;
+          queue[tail++] = np;
+        }
+      }
+
+      const boxWidth = maxX - minX + 1;
+      const boxHeight = maxY - minY + 1;
+      if (area < minArea || area > maxArea || boxWidth < minDim || boxHeight < minDim || boxWidth > maxDim || boxHeight > maxDim) continue;
+      const aspect = boxWidth / Math.max(1, boxHeight);
+      if (aspect < 0.35 || aspect > 2.8) continue;
+
+      const fill = area / Math.max(1, boxWidth * boxHeight);
+      const centerX = (minX + maxX) / 2 / width;
+      const centerY = (minY + maxY) / 2 / height;
+      const edgeBoost = Math.max(Math.abs(centerX - 0.5), Math.abs(centerY - 0.5));
+      const score = fill + edgeBoost * 0.55 + Math.min(0.3, area / 900);
+      if (!best || score > best.score) {
+        const pad = Math.max(5, Math.round(Math.max(boxWidth, boxHeight) * 0.65));
+        const px = Math.max(0, minX - pad);
+        const py = Math.max(0, minY - pad);
+        const pw = Math.min(width - px, boxWidth + pad * 2);
+        const ph = Math.min(height - py, boxHeight + pad * 2);
+        best = {
+          x: (px / width) * 100,
+          y: (py / height) * 100,
+          width: (pw / width) * 100,
+          height: (ph / height) * 100,
+          score
+        };
+      }
+    }
+
+    return best
+      ? {
+          id: "auto-bright-logo",
+          label: "علامة مائية مقترحة",
+          x: best.x,
+          y: best.y,
+          width: best.width,
+          height: best.height
+        }
+      : null;
+  }
+
   function detectWatermarkCandidates(): DetectionBox[] {
     const target = getCanvas();
     if (!target) return [];
@@ -449,6 +544,8 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       { id: "top-right", label: "شعار أعلى اليمين", x: 84, y: 2, width: 14, height: 14 },
       { id: "top-left", label: "شعار أعلى اليسار", x: 2, y: 2, width: 14, height: 14 }
     ];
+    const autoCandidate = findBrightLogoCandidate(data, canvas.width, canvas.height);
+    if (autoCandidate) candidates.push(autoCandidate);
 
     const scored = candidates
       .map((box) => {
@@ -474,8 +571,8 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
             const j = (y * canvas.width + x + 1) * 4;
             const l2 = (data[j] + data[j + 1] + data[j + 2]) / 3;
             const edge = Math.abs(l - l2);
-            if (l > 190) bright += 1;
-            if ((l > 168 && saturation < 54) || l > 224) {
+            if ((l > 138 && saturation < 86) || l > 212) bright += 1;
+            if ((l > 138 && saturation < 86) || l > 212) {
               minX = Math.min(minX, x);
               minY = Math.min(minY, y);
               maxX = Math.max(maxX, x);
@@ -486,6 +583,13 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
           }
         }
         const hasBounds = minX < maxX && minY < maxY;
+        const brightRatio = count ? bright / count : 0;
+        const componentWidth = hasBounds ? maxX - minX + 1 : ex - sx;
+        const componentHeight = hasBounds ? maxY - minY + 1 : ey - sy;
+        const componentRatio = (componentWidth * componentHeight) / Math.max(1, (ex - sx) * (ey - sy));
+        const logoLikeRatio = Math.max(0, 1 - Math.abs(brightRatio - 0.16) / 0.28);
+        const largeBrightPenalty = brightRatio > 0.48 ? 0.75 : 0;
+        const largeComponentPenalty = componentRatio > 0.62 ? 0.35 : 0;
         const padX = Math.round(canvas.width * 0.012);
         const padY = Math.round(canvas.height * 0.012);
         const refined = hasBounds
@@ -496,7 +600,11 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
               height: Math.min(100, ((maxY - minY + padY * 2) / canvas.height) * 100)
             }
           : box;
-        return { ...box, ...refined, score: count ? bright / count + contrast / count / 80 : 0 };
+        return {
+          ...box,
+          ...refined,
+          score: count ? logoLikeRatio + contrast / count / 140 - largeBrightPenalty - largeComponentPenalty : 0
+        };
       })
       .sort((a, b) => b.score - a.score);
 
@@ -535,6 +643,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     const mask = buildRemovalMask(target.canvas.width, target.canvas.height, targetSelection, options);
     if (options.preciseWatermark) {
       textureAwareWatermarkFill(result, mask, target.canvas.width, target.canvas.height);
+      inpaintImage(result, mask, target.canvas.width, target.canvas.height);
       harmonizeInpaint(result, mask, target.canvas.width, target.canvas.height, 0.42);
       cleanupBrightResidue(result, mask, target.canvas.width, target.canvas.height);
       flattenMaskAlpha(result, mask, target.canvas.width, target.canvas.height);
@@ -561,7 +670,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     const mask = new Uint8Array(width * height);
     const maskCanvas = getMaskCanvas();
     let hasBrushMask = false;
-    if (maskCanvas && maskCanvas.canvas.width && maskCanvas.canvas.height) {
+    if (!options.ignoreBrushMask && maskCanvas && maskCanvas.canvas.width && maskCanvas.canvas.height) {
       const data = maskCanvas.ctx.getImageData(0, 0, maskCanvas.canvas.width, maskCanvas.canvas.height).data;
       for (let y = 0; y < height; y++) {
         const my = Math.min(maskCanvas.canvas.height - 1, Math.floor((y / height) * maskCanvas.canvas.height));
@@ -980,7 +1089,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     const detectedSelection = expandSelectionBox(detectWatermarkSelection(), 1.2);
     setSelection(detectedSelection);
     setStatus("removing");
-    await removeObject(detectedSelection, { preciseWatermark: true });
+    await removeObject(detectedSelection, { preciseWatermark: true, ignoreBrushMask: true });
   }
 
   function downloadResult() {
