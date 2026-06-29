@@ -51,6 +51,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragStart, setDragStart] = useState<{ x: number; y: number; panX: number; panY: number } | null>(null);
   const [brushSize, setBrushSize] = useState(34);
+  const [autoRemoveWatermark, setAutoRemoveWatermark] = useState(false);
   const [imageUrl, setImageUrl] = useState("");
   const [resultUrl, setResultUrl] = useState("");
   const [uploadedUrl, setUploadedUrl] = useState("");
@@ -102,7 +103,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
 
   useEffect(() => {
     refreshUsage();
-    loadImage(sampleImage);
+    void loadImage(sampleImage);
   }, [sampleImage]);
 
   function notify(message: string) {
@@ -166,37 +167,52 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     mask.ctx.clearRect(0, 0, width, height);
   }
 
-  function loadImage(src: string) {
-    const img = new Image();
-    img.onload = () => {
-      imageRef.current = img;
-      const target = getCanvas();
-      if (!target) return;
-      const maxWidth = 920;
-      const scale = Math.min(1, maxWidth / img.naturalWidth);
-      target.canvas.width = Math.round(img.naturalWidth * scale);
-      target.canvas.height = Math.round(img.naturalHeight * scale);
-      syncMaskCanvas(target.canvas.width, target.canvas.height);
-      target.ctx.clearRect(0, 0, target.canvas.width, target.canvas.height);
-      target.ctx.drawImage(img, 0, 0, target.canvas.width, target.canvas.height);
-      setHistory([target.canvas.toDataURL("image/png")]);
-      setFuture([]);
-      setResultUrl("");
-      setShowAfter(false);
-      setPan({ x: 0, y: 0 });
-    };
-    img.src = src;
-    setImageUrl(src);
+  function loadImage(src: string, options: { recordHistory?: boolean; clearFuture?: boolean } = {}) {
+    const { recordHistory = true, clearFuture = true } = options;
+    return new Promise<void>((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        imageRef.current = img;
+        const target = getCanvas();
+        if (!target) {
+          resolve();
+          return;
+        }
+        const maxWidth = 920;
+        const scale = Math.min(1, maxWidth / img.naturalWidth);
+        target.canvas.width = Math.round(img.naturalWidth * scale);
+        target.canvas.height = Math.round(img.naturalHeight * scale);
+        syncMaskCanvas(target.canvas.width, target.canvas.height);
+        target.ctx.clearRect(0, 0, target.canvas.width, target.canvas.height);
+        target.ctx.drawImage(img, 0, 0, target.canvas.width, target.canvas.height);
+        if (recordHistory) {
+          setHistory((items) => (items[items.length - 1] === src ? items : [...items, src].slice(-20)));
+          if (clearFuture) setFuture([]);
+        }
+        setResultUrl("");
+        setShowAfter(false);
+        setPan({ x: 0, y: 0 });
+        resolve();
+      };
+      img.src = src;
+      setImageUrl(src);
+    });
   }
 
   async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
     const file = event.target.files?.[0];
     if (!file) return;
     setStatus("uploading");
     const reader = new FileReader();
     reader.onload = async () => {
       const dataUrl = String(reader.result);
-      loadImage(dataUrl);
+      await loadImage(dataUrl);
+      const detectedSelection = detectWatermarkSelection();
+      setSelection(detectedSelection);
+      if (autoRemoveWatermark && unlocked) {
+        window.setTimeout(() => void removeObject(detectedSelection), 120);
+      }
       const response = await fetch("/api/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -207,6 +223,9 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       setUploadedUrl("");
       setStatus("idle");
       notify("تم رفع الصورة");
+    };
+    reader.onloadend = () => {
+      input.value = "";
     };
     reader.readAsDataURL(file);
   }
@@ -238,6 +257,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     setFuture([]);
     setPan({ x: 0, y: 0 });
     setSelection({ x: 88, y: 86, w: 8, h: 8 });
+    if (fileInputRef.current) fileInputRef.current.value = "";
     notify("تمت إزالة الصورة، اختر صورة أخرى");
     window.setTimeout(() => fileInputRef.current?.click(), 80);
   }
@@ -275,22 +295,49 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     const previous = history[history.length - 2];
     setFuture((items) => [history[history.length - 1], ...items]);
     setHistory((items) => items.slice(0, -1));
-    loadImage(previous);
+    void loadImage(previous, { recordHistory: false });
   }
 
   function redo() {
     const next = future[0];
     if (!next) return;
     setFuture((items) => items.slice(1));
-    loadImage(next);
+    setHistory((items) => [...items, next].slice(-20));
+    void loadImage(next, { recordHistory: false });
+  }
+
+  function getDisplayedImageBox() {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const sourceRatio = canvas.width && canvas.height ? canvas.width / canvas.height : rect.width / rect.height;
+    const frameRatio = rect.width / rect.height;
+    if (frameRatio > sourceRatio) {
+      const width = rect.height * sourceRatio;
+      return { left: rect.left + (rect.width - width) / 2, top: rect.top, width, height: rect.height };
+    }
+    const height = rect.width / sourceRatio;
+    return { left: rect.left, top: rect.top + (rect.height - height) / 2, width: rect.width, height };
+  }
+
+  function getDisplayedImageBoxPercent() {
+    const canvas = canvasRef.current;
+    const box = getDisplayedImageBox();
+    if (!canvas || !box) return { left: 0, top: 0, width: 100, height: 100 };
+    const rect = canvas.getBoundingClientRect();
+    return {
+      left: ((box.left - rect.left) / rect.width) * 100,
+      top: ((box.top - rect.top) / rect.height) * 100,
+      width: (box.width / rect.width) * 100,
+      height: (box.height / rect.height) * 100
+    };
   }
 
   function pointerToPercent(event: MouseEvent<HTMLCanvasElement>) {
-    const canvas = canvasRef.current!;
-    const rect = canvas.getBoundingClientRect();
+    const rect = getDisplayedImageBox() ?? canvasRef.current!.getBoundingClientRect();
     return {
-      x: ((event.clientX - rect.left) / rect.width) * 100,
-      y: ((event.clientY - rect.top) / rect.height) * 100
+      x: Math.min(100, Math.max(0, ((event.clientX - rect.left) / rect.width) * 100)),
+      y: Math.min(100, Math.max(0, ((event.clientY - rect.top) / rect.height) * 100))
     };
   }
 
@@ -338,9 +385,9 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     const target = getCanvas();
     const mask = getMaskCanvas();
     if (!target || !mask) return;
-    const rect = target.canvas.getBoundingClientRect();
-    const x = ((event.clientX - rect.left) / rect.width) * mask.canvas.width;
-    const y = ((event.clientY - rect.top) / rect.height) * mask.canvas.height;
+    const rect = getDisplayedImageBox() ?? target.canvas.getBoundingClientRect();
+    const x = Math.min(mask.canvas.width, Math.max(0, ((event.clientX - rect.left) / rect.width) * mask.canvas.width));
+    const y = Math.min(mask.canvas.height, Math.max(0, ((event.clientY - rect.top) / rect.height) * mask.canvas.height));
     mask.ctx.save();
     mask.ctx.globalCompositeOperation = erase ? "destination-out" : "source-over";
     mask.ctx.fillStyle = "rgba(124, 58, 237, 0.62)";
@@ -358,6 +405,13 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     if (boxes[0]) setSelection({ x: boxes[0].x, y: boxes[0].y, w: boxes[0].width, h: boxes[0].height });
     setStatus("idle");
     notify(boxes.length ? "تم تحديد علامة مائية مقترحة" : "لم يظهر شعار واضح، حدد المنطقة بالفرشاة");
+  }
+
+  function detectWatermarkSelection() {
+    const boxes = detectWatermarkCandidates();
+    const box = boxes[0];
+    if (box) return { x: box.x, y: box.y, w: box.width, h: box.height };
+    return { x: 84, y: 82, w: 14, h: 14 };
   }
 
   function detectWatermarkCandidates(): DetectionBox[] {
@@ -419,7 +473,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     if (selected && accepted) setSelection({ x: selected.x, y: selected.y, w: selected.width, h: selected.height });
   }
 
-  function makeResult() {
+  function makeResult(targetSelection = selection) {
     const target = getCanvas();
     const img = imageRef.current;
     if (!target || !img) return "";
@@ -429,7 +483,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     target.ctx.drawImage(img, 0, 0, target.canvas.width, target.canvas.height);
 
     const result = target.ctx.getImageData(0, 0, target.canvas.width, target.canvas.height);
-    const mask = buildRemovalMask(target.canvas.width, target.canvas.height);
+    const mask = buildRemovalMask(target.canvas.width, target.canvas.height, targetSelection);
     inpaintImage(result, mask, target.canvas.width, target.canvas.height);
     target.ctx.putImageData(result, 0, 0);
 
@@ -441,7 +495,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     return output;
   }
 
-  function buildRemovalMask(width: number, height: number) {
+  function buildRemovalMask(width: number, height: number, targetSelection = selection) {
     const mask = new Uint8Array(width * height);
     const maskCanvas = getMaskCanvas();
     let hasBrushMask = false;
@@ -461,10 +515,10 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     }
 
     if (!hasBrushMask) {
-      const sx = Math.max(0, Math.round((selection.x / 100) * width));
-      const sy = Math.max(0, Math.round((selection.y / 100) * height));
-      const sw = Math.max(8, Math.round((selection.w / 100) * width));
-      const sh = Math.max(8, Math.round((selection.h / 100) * height));
+      const sx = Math.max(0, Math.round((targetSelection.x / 100) * width));
+      const sy = Math.max(0, Math.round((targetSelection.y / 100) * height));
+      const sw = Math.max(8, Math.round((targetSelection.w / 100) * width));
+      const sh = Math.max(8, Math.round((targetSelection.h / 100) * height));
       const pad = Math.max(4, Math.round(Math.min(sw, sh) * 0.2));
       for (let y = Math.max(0, sy - pad); y < Math.min(height, sy + sh + pad); y++) {
         for (let x = Math.max(0, sx - pad); x < Math.min(width, sx + sw + pad); x++) {
@@ -591,7 +645,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     }
   }
 
-  async function removeObject() {
+  async function removeObject(targetSelection = selection) {
     if (!unlocked || locked) {
       notify("أدخل كود التفعيل أولا");
       return;
@@ -601,7 +655,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       const originalForSave = /^data:image\/(png|jpe?g|webp);base64,/.test(imageUrl)
         ? imageUrl
         : getCanvas()?.canvas.toDataURL("image/png") ?? imageUrl;
-      const output = makeResult();
+      const output = makeResult(targetSelection);
       const response = await fetch("/api/remove-object", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -633,6 +687,15 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
   const usageLabel = usage ? `${usage.remaining_uses} من ${usage.total_uses} استخدام` : "0 من 0 استخدام";
 
   const canvasTransform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
+  const displayBox = getDisplayedImageBoxPercent();
+  const selectionStyle = {
+    left: `${displayBox.left + (selection.x / 100) * displayBox.width}%`,
+    top: `${displayBox.top + (selection.y / 100) * displayBox.height}%`,
+    width: `${(selection.w / 100) * displayBox.width}%`,
+    height: `${(selection.h / 100) * displayBox.height}%`,
+    transform: canvasTransform,
+    transformOrigin: "center"
+  };
 
   return (
     <div className="relative">
@@ -653,6 +716,15 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
               <ImageOff className="h-5 w-5" />
               إزالة الصورة
             </Button>
+            <label className="flex h-12 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-black text-slate-700">
+              <input
+                type="checkbox"
+                checked={autoRemoveWatermark}
+                onChange={(event) => setAutoRemoveWatermark(event.target.checked)}
+                className="h-4 w-4 accent-violet-600"
+              />
+              إزالة العلامة بعد الرفع
+            </label>
             <div className={cn("flex h-12 items-center gap-3 border-r border-slate-200 pr-4", unlocked && "text-emerald-700")}>
               {unlocked ? <LockOpen className="h-6 w-6" /> : <Lock className="h-6 w-6" />}
               <span className="text-xs font-bold">{unlocked ? "مفتوح" : "مقفل"}</span>
@@ -744,14 +816,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
                 />
                 <div
                   className="pointer-events-none absolute border-2 border-dashed border-blue-600"
-                  style={{
-                    right: `${100 - selection.x - selection.w}%`,
-                    top: `${selection.y}%`,
-                    width: `${selection.w}%`,
-                    height: `${selection.h}%`,
-                    transform: canvasTransform,
-                    transformOrigin: "center"
-                  }}
+                  style={selectionStyle}
                 >
                   <span className="absolute -right-2 -top-2 h-4 w-4 rounded-full border-2 border-blue-600 bg-white" />
                   <span className="absolute -left-2 -top-2 h-4 w-4 rounded-full border-2 border-blue-600 bg-white" />
@@ -817,7 +882,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
                   تطبيق القص
                 </Button>
               ) : null}
-              <Button onClick={removeObject} disabled={locked || !unlocked || !imageUrl || status === "removing"}>
+              <Button onClick={() => void removeObject()} disabled={locked || !unlocked || !imageUrl || status === "removing"}>
                 <WandSparkles className="h-5 w-5" />
                 إزالة العنصر
               </Button>
