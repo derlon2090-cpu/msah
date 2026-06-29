@@ -7,8 +7,12 @@ const globalForPrisma = globalThis as unknown as {
 export function getDatabaseUrl() {
   return (
     process.env.DATABASE_URL?.trim() ||
+    process.env.DATABASE_URL_UNPOOLED?.trim() ||
+    process.env.PRISMA_DATABASE_URL?.trim() ||
     process.env.POSTGRES_PRISMA_URL?.trim() ||
     process.env.POSTGRES_URL?.trim() ||
+    process.env.POSTGRES_URL_NON_POOLING?.trim() ||
+    process.env.POSTGRES_URL_NO_SSL?.trim() ||
     process.env.NEON_DATABASE_URL?.trim() ||
     ""
   );

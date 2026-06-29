@@ -83,7 +83,7 @@ async function createSchema() {
 
 export async function ensureDatabase() {
   if (!getDatabaseUrl()) {
-    throw new Error("DATABASE_URL غير موجود في Vercel Production. أضفه لكل البيئات أو أضف POSTGRES_URL من Neon.");
+    throw new Error("قاعدة البيانات غير متصلة في Vercel Production. أضف DATABASE_URL أو POSTGRES_URL من Neon ثم اعمل Redeploy.");
   }
 
   ensurePromise ??= createSchema().catch((error) => {
