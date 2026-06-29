@@ -195,12 +195,12 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
           resolve();
           return;
         }
-        const maxPreviewDimension = 2600;
-        const scale = Math.min(1, maxPreviewDimension / Math.max(img.naturalWidth, img.naturalHeight));
-        target.canvas.width = Math.round(img.naturalWidth * scale);
-        target.canvas.height = Math.round(img.naturalHeight * scale);
+        target.canvas.width = img.naturalWidth;
+        target.canvas.height = img.naturalHeight;
         syncMaskCanvas(target.canvas.width, target.canvas.height);
         target.ctx.clearRect(0, 0, target.canvas.width, target.canvas.height);
+        target.ctx.imageSmoothingEnabled = true;
+        target.ctx.imageSmoothingQuality = "high";
         target.ctx.drawImage(img, 0, 0, target.canvas.width, target.canvas.height);
         if (recordHistory) {
           setHistory((items) => (items[items.length - 1] === src ? items : [...items, src].slice(-20)));
@@ -526,6 +526,15 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     const mask = buildRemovalMask(target.canvas.width, target.canvas.height, targetSelection, options);
     if (options.preciseWatermark) {
       textureAwareWatermarkFill(result, mask, target.canvas.width, target.canvas.height);
+      harmonizeInpaint(result, mask, target.canvas.width, target.canvas.height, 0.42);
+      cleanupBrightResidue(result, mask, target.canvas.width, target.canvas.height);
+      flattenMaskAlpha(result, mask, target.canvas.width, target.canvas.height);
+      target.ctx.putImageData(result, 0, 0);
+      const output = target.canvas.toDataURL("image/png");
+      setResultUrl(output);
+      setShowAfter(true);
+      clearMask();
+      return output;
     }
     inpaintImage(result, mask, target.canvas.width, target.canvas.height);
     harmonizeInpaint(result, mask, target.canvas.width, target.canvas.height);
@@ -712,6 +721,50 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     }
   }
 
+  function cleanupBrightResidue(image: ImageData, mask: Uint8Array, width: number, height: number) {
+    const data = image.data;
+    const source = new Uint8ClampedArray(data);
+    const refined = dilateMask(mask, width, height, 2);
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        const p = y * width + x;
+        if (!refined[p]) continue;
+        const i = p * 4;
+        const l = (data[i] + data[i + 1] + data[i + 2]) / 3;
+        const saturation = Math.max(data[i], data[i + 1], data[i + 2]) - Math.min(data[i], data[i + 1], data[i + 2]);
+        if (l < 145 || saturation > 72) continue;
+
+        let r = 0;
+        let g = 0;
+        let b = 0;
+        let total = 0;
+        for (let dy = -6; dy <= 6; dy++) {
+          for (let dx = -6; dx <= 6; dx++) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+            const np = ny * width + nx;
+            if (refined[np]) continue;
+            const ni = np * 4;
+            const nl = (source[ni] + source[ni + 1] + source[ni + 2]) / 3;
+            const ns = Math.max(source[ni], source[ni + 1], source[ni + 2]) - Math.min(source[ni], source[ni + 1], source[ni + 2]);
+            if (nl > 175 && ns < 60) continue;
+            const weight = 1 / Math.max(1, Math.abs(dx) + Math.abs(dy));
+            r += source[ni] * weight;
+            g += source[ni + 1] * weight;
+            b += source[ni + 2] * weight;
+            total += weight;
+          }
+        }
+        if (total <= 0) continue;
+        data[i] = r / total;
+        data[i + 1] = g / total;
+        data[i + 2] = b / total;
+        data[i + 3] = 255;
+      }
+    }
+  }
+
   function inpaintImage(image: ImageData, rawMask: Uint8Array, width: number, height: number) {
     const data = image.data;
     let mask = new Uint8Array(rawMask);
@@ -810,7 +863,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     }
   }
 
-  function harmonizeInpaint(image: ImageData, rawMask: Uint8Array, width: number, height: number) {
+  function harmonizeInpaint(image: ImageData, rawMask: Uint8Array, width: number, height: number, strength = 0.28) {
     const data = image.data;
     const original = new Uint8ClampedArray(data);
     const refined = dilateMask(rawMask, width, height, 1);
@@ -843,7 +896,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
 
         if (total <= 0) continue;
         const i = p * 4;
-        const blend = rawMask[p] ? 0.28 : 0.18;
+        const blend = rawMask[p] ? strength : Math.min(0.24, strength * 0.65);
         data[i] = data[i] * (1 - blend) + (r / total) * blend;
         data[i + 1] = data[i + 1] * (1 - blend) + (g / total) * blend;
         data[i + 2] = data[i + 2] * (1 - blend) + (b / total) * blend;
