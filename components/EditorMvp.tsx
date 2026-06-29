@@ -425,7 +425,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     const boxes = detectWatermarkCandidates();
     const box = boxes[0];
     if (box) return { x: box.x, y: box.y, w: box.width, h: box.height };
-    return { x: 80, y: 76, w: 18, h: 20 };
+    return { x: 84, y: 84, w: 14, h: 14 };
   }
 
   function expandSelectionBox(box: SelectionBox, amount: number): SelectionBox {
@@ -444,7 +444,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const data = image.data;
     const candidates = [
-      { id: "bottom-right", label: "علامة مائية أسفل اليمين", x: 84, y: 82, width: 14, height: 14 },
+      { id: "bottom-right", label: "علامة مائية أسفل اليمين", x: 84, y: 84, width: 14, height: 14 },
       { id: "bottom-left", label: "علامة مائية أسفل اليسار", x: 2, y: 82, width: 14, height: 14 },
       { id: "top-right", label: "شعار أعلى اليمين", x: 84, y: 2, width: 14, height: 14 },
       { id: "top-left", label: "شعار أعلى اليسار", x: 2, y: 2, width: 14, height: 14 }
@@ -605,6 +605,10 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     const ex = Math.min(width, Math.round(((targetSelection.x + targetSelection.w) / 100) * width));
     const ey = Math.min(height, Math.round(((targetSelection.y + targetSelection.h) / 100) * height));
     let hits = 0;
+    let hitMinX = ex;
+    let hitMinY = ey;
+    let hitMaxX = sx;
+    let hitMaxY = sy;
 
     for (let y = sy; y < ey; y++) {
       for (let x = sx; x < ex; x++) {
@@ -616,12 +620,26 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
         const saturation = Math.max(r, g, b) - Math.min(r, g, b);
         if ((l > 138 && saturation < 86) || l > 212) {
           mask[y * width + x] = 1;
+          hitMinX = Math.min(hitMinX, x);
+          hitMinY = Math.min(hitMinY, y);
+          hitMaxX = Math.max(hitMaxX, x);
+          hitMaxY = Math.max(hitMaxY, y);
           hits += 1;
         }
       }
     }
 
-    if (hits > 12) return true;
+    if (hits > 12) {
+      const hitWidth = Math.max(1, hitMaxX - hitMinX + 1);
+      const hitHeight = Math.max(1, hitMaxY - hitMinY + 1);
+      const pad = Math.max(5, Math.round(Math.max(hitWidth, hitHeight) * 0.55));
+      for (let y = Math.max(0, hitMinY - pad); y < Math.min(height, hitMaxY + pad); y++) {
+        for (let x = Math.max(0, hitMinX - pad); x < Math.min(width, hitMaxX + pad); x++) {
+          mask[y * width + x] = 1;
+        }
+      }
+      return true;
+    }
 
     const fallbackPad = Math.max(4, Math.round(Math.min(ex - sx, ey - sy) * 0.18));
     for (let y = Math.max(0, sy - fallbackPad); y < Math.min(height, ey + fallbackPad); y++) {
@@ -959,7 +977,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       return;
     }
     setStatus("analyzing");
-    const detectedSelection = expandSelectionBox(detectWatermarkSelection(), 2.5);
+    const detectedSelection = expandSelectionBox(detectWatermarkSelection(), 1.2);
     setSelection(detectedSelection);
     setStatus("removing");
     await removeObject(detectedSelection, { preciseWatermark: true });
