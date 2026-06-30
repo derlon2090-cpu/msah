@@ -69,12 +69,14 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragStart, setDragStart] = useState<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  const rectStartRef = useRef<{ x: number; y: number } | null>(null);
   const [brushSize, setBrushSize] = useState(34);
   const [imageUrl, setImageUrl] = useState("");
   const [resultUrl, setResultUrl] = useState("");
   const [uploadedUrl, setUploadedUrl] = useState("");
   const [showAfter, setShowAfter] = useState(false);
   const [selection, setSelection] = useState({ x: 88, y: 86, w: 8, h: 8 });
+  const [manualSelection, setManualSelection] = useState(false);
   const [isDrawing, setIsDrawing] = useState(false);
   const [history, setHistory] = useState<string[]>([]);
   const [future, setFuture] = useState<string[]>([]);
@@ -185,6 +187,36 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     mask.ctx.clearRect(0, 0, width, height);
   }
 
+  function canvasToRgbJpeg(canvas: HTMLCanvasElement, quality = 0.95) {
+    const output = document.createElement("canvas");
+    output.width = canvas.width;
+    output.height = canvas.height;
+    const ctx = output.getContext("2d");
+    if (!ctx) return canvas.toDataURL("image/jpeg", quality);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, output.width, output.height);
+    ctx.drawImage(canvas, 0, 0);
+    return output.toDataURL("image/jpeg", quality);
+  }
+
+  function maskToDataUrl(mask: Uint8Array, width: number, height: number) {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return "";
+    const image = ctx.createImageData(width, height);
+    for (let i = 0; i < mask.length; i++) {
+      const value = mask[i] ? 255 : 0;
+      image.data[i * 4] = value;
+      image.data[i * 4 + 1] = value;
+      image.data[i * 4 + 2] = value;
+      image.data[i * 4 + 3] = 255;
+    }
+    ctx.putImageData(image, 0, 0);
+    return canvasToRgbJpeg(canvas, 0.95);
+  }
+
   function loadImage(src: string, options: { recordHistory?: boolean; clearFuture?: boolean } = {}) {
     const { recordHistory = true, clearFuture = true } = options;
     return new Promise<void>((resolve) => {
@@ -200,6 +232,8 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
         target.canvas.height = img.naturalHeight;
         syncMaskCanvas(target.canvas.width, target.canvas.height);
         target.ctx.clearRect(0, 0, target.canvas.width, target.canvas.height);
+        target.ctx.fillStyle = "#ffffff";
+        target.ctx.fillRect(0, 0, target.canvas.width, target.canvas.height);
         target.ctx.imageSmoothingEnabled = true;
         target.ctx.imageSmoothingQuality = "high";
         target.ctx.drawImage(img, 0, 0, target.canvas.width, target.canvas.height);
@@ -209,6 +243,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
         }
         setResultUrl("");
         setShowAfter(false);
+        setManualSelection(false);
         setPan({ x: 0, y: 0 });
         resolve();
       };
@@ -272,6 +307,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     setFuture([]);
     setPan({ x: 0, y: 0 });
     setSelection({ x: 88, y: 86, w: 8, h: 8 });
+    setManualSelection(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
     notify("تمت إزالة الصورة، اختر صورة أخرى");
     window.setTimeout(() => fileInputRef.current?.click(), 80);
@@ -363,6 +399,8 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       setDragStart({ x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y });
     } else if (tool === "rect" || tool === "crop") {
       const point = pointerToPercent(event);
+      rectStartRef.current = point;
+      setManualSelection(true);
       setSelection({ x: point.x, y: point.y, w: 1, h: 1 });
     } else if (tool === "brush" || tool === "erase") {
       paint(event, tool === "erase");
@@ -378,12 +416,13 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       });
     } else if (tool === "rect" || tool === "crop") {
       const point = pointerToPercent(event);
-      setSelection((start) => ({
+      const start = rectStartRef.current ?? point;
+      setSelection({
         x: Math.min(start.x, point.x),
         y: Math.min(start.y, point.y),
         w: Math.abs(point.x - start.x),
         h: Math.abs(point.y - start.y)
-      }));
+      });
     } else if (tool === "brush" || tool === "erase") {
       paint(event, tool === "erase");
     }
@@ -393,6 +432,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     if (!isDrawing) return;
     setIsDrawing(false);
     setDragStart(null);
+    rectStartRef.current = null;
     if (tool === "brush" || tool === "erase") pushHistory();
   }
 
@@ -418,6 +458,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     const boxes = detectWatermarkCandidates();
     setDetections(boxes);
     if (boxes[0]) setSelection({ x: boxes[0].x, y: boxes[0].y, w: boxes[0].width, h: boxes[0].height });
+    setManualSelection(false);
     setStatus("idle");
     notify(boxes.length ? "تم تحديد علامة مائية مقترحة" : "لم يظهر شعار واضح، حدد المنطقة بالفرشاة");
   }
@@ -438,6 +479,12 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     };
   }
 
+  function isWatermarkTone(r: number, g: number, b: number, edge = 0) {
+    const l = (r + g + b) / 3;
+    const saturation = Math.max(r, g, b) - Math.min(r, g, b);
+    return l > 212 || (l > 138 && saturation < 86) || (l > 58 && saturation < 54 && edge > 2.8);
+  }
+
   function findBrightLogoCandidate(data: Uint8ClampedArray, width: number, height: number) {
     const totalPixels = width * height;
     const bright = new Uint8Array(totalPixels);
@@ -454,8 +501,9 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       const g = data[i + 1];
       const b = data[i + 2];
       const l = (r + g + b) / 3;
-      const saturation = Math.max(r, g, b) - Math.min(r, g, b);
-      if ((l > 166 && saturation < 92) || l > 224) bright[p] = 1;
+      const ri = p % width < width - 1 ? i + 4 : i;
+      const edge = Math.abs(l - (data[ri] + data[ri + 1] + data[ri + 2]) / 3);
+      if (isWatermarkTone(r, g, b, edge)) bright[p] = 1;
     }
 
     let best: { x: number; y: number; width: number; height: number; score: number } | null = null;
@@ -571,8 +619,8 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
             const j = (y * canvas.width + x + 1) * 4;
             const l2 = (data[j] + data[j + 1] + data[j + 2]) / 3;
             const edge = Math.abs(l - l2);
-            if ((l > 138 && saturation < 86) || l > 212) bright += 1;
-            if ((l > 138 && saturation < 86) || l > 212) {
+            if (isWatermarkTone(r, g, b, edge)) bright += 1;
+            if (isWatermarkTone(r, g, b, edge)) {
               minX = Math.min(minX, x);
               minY = Math.min(minY, y);
               maxX = Math.max(maxX, x);
@@ -637,6 +685,8 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
 
     target.canvas.width = img.naturalWidth;
     target.canvas.height = img.naturalHeight;
+    target.ctx.fillStyle = "#ffffff";
+    target.ctx.fillRect(0, 0, target.canvas.width, target.canvas.height);
     target.ctx.drawImage(img, 0, 0, target.canvas.width, target.canvas.height);
 
     const result = target.ctx.getImageData(0, 0, target.canvas.width, target.canvas.height);
@@ -647,7 +697,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       blendWatermarkPatchEdges(result, mask, target.canvas.width, target.canvas.height);
       flattenMaskAlpha(result, mask, target.canvas.width, target.canvas.height);
       target.ctx.putImageData(result, 0, 0);
-      const output = target.canvas.toDataURL("image/png");
+      const output = canvasToRgbJpeg(target.canvas, 0.95);
       setResultUrl(output);
       setShowAfter(true);
       clearMask();
@@ -658,7 +708,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     flattenMaskAlpha(result, mask, target.canvas.width, target.canvas.height);
     target.ctx.putImageData(result, 0, 0);
 
-    const output = target.canvas.toDataURL("image/png");
+    const output = canvasToRgbJpeg(target.canvas, 0.95);
     setResultUrl(output);
     setShowAfter(true);
     clearMask();
@@ -726,7 +776,9 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
         const b = data[i + 2];
         const l = (r + g + b) / 3;
         const saturation = Math.max(r, g, b) - Math.min(r, g, b);
-        if ((l > 138 && saturation < 86) || l > 212) {
+        const rightIndex = (y * width + Math.min(width - 1, x + 1)) * 4;
+        const rightL = (data[rightIndex] + data[rightIndex + 1] + data[rightIndex + 2]) / 3;
+        if (isWatermarkTone(r, g, b, Math.abs(l - rightL))) {
           mask[y * width + x] = 1;
           hitMinX = Math.min(hitMinX, x);
           hitMinY = Math.min(hitMinY, y);
@@ -1246,9 +1298,11 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     }
     setStatus("removing");
     try {
-      const originalForSave = /^data:image\/(png|jpe?g|webp);base64,/.test(imageUrl)
-        ? imageUrl
-        : getCanvas()?.canvas.toDataURL("image/png") ?? imageUrl;
+      const target = getCanvas();
+      const originalForSave = target ? canvasToRgbJpeg(target.canvas, 0.95) : imageUrl;
+      const maskForSave = target
+        ? maskToDataUrl(buildRemovalMask(target.canvas.width, target.canvas.height, targetSelection, options), target.canvas.width, target.canvas.height)
+        : "";
       const output = makeResult(targetSelection, options);
       const response = await fetch("/api/remove-object", {
         method: "POST",
@@ -1256,11 +1310,13 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
         body: JSON.stringify({
           code,
           originalDataUrl: originalForSave,
-          resultDataUrl: output
+          resultDataUrl: output,
+          maskDataUrl: maskForSave
         })
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error ?? "تعذر حفظ الصورة");
+      if (payload.resultUrl) setResultUrl(`${payload.resultUrl}?v=${Date.now()}`);
       if (payload.usage) setUsage(payload.usage);
       await refreshUsage();
       setStatus("done");
@@ -1277,7 +1333,8 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       return;
     }
     setStatus("analyzing");
-    const detectedSelection = expandSelectionBox(detectWatermarkSelection(), 1.2);
+    const selectedBox = manualSelection && selection.w > 1.5 && selection.h > 1.5 ? selection : detectWatermarkSelection();
+    const detectedSelection = expandSelectionBox(selectedBox, manualSelection ? 0.8 : 1.2);
     setSelection(detectedSelection);
     setStatus("removing");
     await removeObject(detectedSelection, { preciseWatermark: true, ignoreBrushMask: true });
