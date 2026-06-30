@@ -643,9 +643,8 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     const mask = buildRemovalMask(target.canvas.width, target.canvas.height, targetSelection, options);
     if (options.preciseWatermark) {
       textureAwareWatermarkFill(result, mask, target.canvas.width, target.canvas.height);
-      inpaintImage(result, mask, target.canvas.width, target.canvas.height);
-      harmonizeInpaint(result, mask, target.canvas.width, target.canvas.height, 0.42);
       cleanupBrightResidue(result, mask, target.canvas.width, target.canvas.height);
+      blendWatermarkPatchEdges(result, mask, target.canvas.width, target.canvas.height);
       flattenMaskAlpha(result, mask, target.canvas.width, target.canvas.height);
       target.ctx.putImageData(result, 0, 0);
       const output = target.canvas.toDataURL("image/png");
@@ -904,6 +903,47 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
         data[i] = r / total;
         data[i + 1] = g / total;
         data[i + 2] = b / total;
+        data[i + 3] = 255;
+      }
+    }
+  }
+
+  function blendWatermarkPatchEdges(image: ImageData, mask: Uint8Array, width: number, height: number) {
+    const data = image.data;
+    const source = new Uint8ClampedArray(data);
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        const p = y * width + x;
+        if (!mask[p]) continue;
+
+        let touchesOriginal = false;
+        let r = 0;
+        let g = 0;
+        let b = 0;
+        let total = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx;
+            const ny = y + dy;
+            const np = ny * width + nx;
+            if (mask[np]) continue;
+            touchesOriginal = true;
+            const weight = dx === 0 || dy === 0 ? 1 : 0.55;
+            const ni = np * 4;
+            r += source[ni] * weight;
+            g += source[ni + 1] * weight;
+            b += source[ni + 2] * weight;
+            total += weight;
+          }
+        }
+
+        if (!touchesOriginal || total <= 0) continue;
+        const i = p * 4;
+        const blend = 0.28;
+        data[i] = data[i] * (1 - blend) + (r / total) * blend;
+        data[i + 1] = data[i + 1] * (1 - blend) + (g / total) * blend;
+        data[i + 2] = data[i + 2] * (1 - blend) + (b / total) * blend;
         data[i + 3] = 255;
       }
     }
