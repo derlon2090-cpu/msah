@@ -797,29 +797,181 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     if (!bounds) return;
     const data = image.data;
     const original = new Uint8ClampedArray(data);
-    const boxWidth = Math.max(8, bounds.maxX - bounds.minX + 1);
-    const candidates = [
-      { dx: -Math.max(6, Math.round(boxWidth * 1.15)), dy: 0 },
-      { dx: -Math.max(6, Math.round(boxWidth * 0.75)), dy: -Math.max(4, Math.round(boxWidth * 0.25)) },
-      { dx: 0, dy: -Math.max(6, Math.round(boxWidth * 0.75)) },
-      { dx: -Math.max(6, Math.round(boxWidth * 0.75)), dy: Math.max(4, Math.round(boxWidth * 0.25)) }
+    const targetWidth = bounds.maxX - bounds.minX + 1;
+    const targetHeight = bounds.maxY - bounds.minY + 1;
+    const maxSide = Math.max(targetWidth, targetHeight);
+    const padding = Math.max(56, Math.round(maxSide * 4.5));
+    const step = Math.max(2, Math.round(Math.min(targetWidth, targetHeight) / 5));
+    const searchMinX = Math.max(0, bounds.minX - padding);
+    const searchMinY = Math.max(0, bounds.minY - padding);
+    const searchMaxX = Math.min(width - targetWidth, bounds.maxX + padding);
+    const searchMaxY = Math.min(height - targetHeight, bounds.maxY + padding);
+
+    let bestX = -1;
+    let bestY = -1;
+    let bestScore = Number.POSITIVE_INFINITY;
+    const preferredOffsets = [
+      { x: bounds.minX - targetWidth - Math.round(maxSide * 0.35), y: bounds.minY },
+      { x: bounds.minX, y: bounds.minY - targetHeight - Math.round(maxSide * 0.35) },
+      { x: bounds.minX - targetWidth - Math.round(maxSide * 0.35), y: bounds.minY - Math.round(targetHeight * 0.35) },
+      { x: bounds.minX - targetWidth - Math.round(maxSide * 0.35), y: bounds.minY + Math.round(targetHeight * 0.35) },
+      { x: bounds.minX, y: bounds.maxY + Math.round(maxSide * 0.35) }
     ];
 
+    const consider = (sx: number, sy: number) => {
+      const x = Math.max(0, Math.min(width - targetWidth, Math.round(sx)));
+      const y = Math.max(0, Math.min(height - targetHeight, Math.round(sy)));
+      const score = scoreTexturePatchCandidate(original, mask, width, height, bounds, x, y, targetWidth, targetHeight);
+      if (!Number.isFinite(score)) return;
+      if (score < bestScore) {
+        bestX = x;
+        bestY = y;
+        bestScore = score;
+      }
+    };
+
+    preferredOffsets.forEach((item) => consider(item.x, item.y));
+    for (let sy = searchMinY; sy <= searchMaxY; sy += step) {
+      for (let sx = searchMinX; sx <= searchMaxX; sx += step) {
+        consider(sx, sy);
+      }
+    }
+
+    if (bestX < 0 || bestY < 0) {
+      exemplarPixelFill(image, mask, width, height);
+      return;
+    }
+
+    for (let y = bounds.minY; y <= bounds.maxY; y++) {
+      for (let x = bounds.minX; x <= bounds.maxX; x++) {
+        const p = y * width + x;
+        if (!mask[p]) continue;
+        const sx = bestX + (x - bounds.minX);
+        const sy = bestY + (y - bounds.minY);
+        const sp = sy * width + sx;
+        const i = p * 4;
+        const si = sp * 4;
+        data[i] = original[si];
+        data[i + 1] = original[si + 1];
+        data[i + 2] = original[si + 2];
+        data[i + 3] = 255;
+      }
+    }
+  }
+
+  function scoreTexturePatchCandidate(
+    data: Uint8ClampedArray,
+    mask: Uint8Array,
+    width: number,
+    height: number,
+    bounds: ImageBounds,
+    sourceX: number,
+    sourceY: number,
+    targetWidth: number,
+    targetHeight: number
+  ) {
+    const sourcePad = 3;
+    for (let y = Math.max(0, sourceY - sourcePad); y < Math.min(height, sourceY + targetHeight + sourcePad); y++) {
+      for (let x = Math.max(0, sourceX - sourcePad); x < Math.min(width, sourceX + targetWidth + sourcePad); x++) {
+        if (mask[y * width + x]) return Number.POSITIVE_INFINITY;
+      }
+    }
+
+    let boundaryDiff = 0;
+    let boundaryCount = 0;
+    let sourceR = 0;
+    let sourceG = 0;
+    let sourceB = 0;
+    let sourceL = 0;
+    let sourceL2 = 0;
+    let sourceCount = 0;
+    let ringR = 0;
+    let ringG = 0;
+    let ringB = 0;
+    let ringL = 0;
+    let ringL2 = 0;
+    let ringCount = 0;
+    const sampleStep = Math.max(1, Math.round(Math.min(targetWidth, targetHeight) / 14));
+
+    for (let ty = bounds.minY; ty <= bounds.maxY; ty += sampleStep) {
+      for (let tx = bounds.minX; tx <= bounds.maxX; tx += sampleStep) {
+        const p = ty * width + tx;
+        const sx = sourceX + (tx - bounds.minX);
+        const sy = sourceY + (ty - bounds.minY);
+        const sp = sy * width + sx;
+        const si = sp * 4;
+        const sr = data[si];
+        const sg = data[si + 1];
+        const sb = data[si + 2];
+        const sl = (sr + sg + sb) / 3;
+        sourceR += sr;
+        sourceG += sg;
+        sourceB += sb;
+        sourceL += sl;
+        sourceL2 += sl * sl;
+        sourceCount += 1;
+
+        if (!mask[p]) continue;
+        for (let dy = -2; dy <= 2; dy++) {
+          for (let dx = -2; dx <= 2; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = tx + dx;
+            const ny = ty + dy;
+            if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+            const np = ny * width + nx;
+            if (mask[np]) continue;
+            const ni = np * 4;
+            const nr = data[ni];
+            const ng = data[ni + 1];
+            const nb = data[ni + 2];
+            const nl = (nr + ng + nb) / 3;
+            const weight = 1 / Math.max(1, Math.abs(dx) + Math.abs(dy));
+            boundaryDiff += (Math.abs(sr - nr) + Math.abs(sg - ng) + Math.abs(sb - nb)) * weight;
+            boundaryCount += weight;
+            ringR += nr;
+            ringG += ng;
+            ringB += nb;
+            ringL += nl;
+            ringL2 += nl * nl;
+            ringCount += 1;
+          }
+        }
+      }
+    }
+
+    if (sourceCount <= 0 || ringCount <= 0 || boundaryCount <= 0) return Number.POSITIVE_INFINITY;
+    const sourceMean = [sourceR / sourceCount, sourceG / sourceCount, sourceB / sourceCount];
+    const ringMean = [ringR / ringCount, ringG / ringCount, ringB / ringCount];
+    const sourceVariance = Math.max(0, sourceL2 / sourceCount - (sourceL / sourceCount) ** 2);
+    const ringVariance = Math.max(0, ringL2 / ringCount - (ringL / ringCount) ** 2);
+    const colorDiff = Math.abs(sourceMean[0] - ringMean[0]) + Math.abs(sourceMean[1] - ringMean[1]) + Math.abs(sourceMean[2] - ringMean[2]);
+    const textureDiff = Math.abs(Math.sqrt(sourceVariance) - Math.sqrt(ringVariance));
+    const distance = Math.hypot(sourceX - bounds.minX, sourceY - bounds.minY) / Math.max(1, Math.max(width, height));
+
+    return boundaryDiff / boundaryCount + colorDiff * 0.55 + textureDiff * 2.2 + distance * 12;
+  }
+
+  function exemplarPixelFill(image: ImageData, mask: Uint8Array, width: number, height: number) {
+    const bounds = getMaskBounds(mask, width, height);
+    if (!bounds) return;
+    const data = image.data;
+    const original = new Uint8ClampedArray(data);
+    const radius = Math.max(18, Math.round(Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY) * 1.6));
     for (let y = bounds.minY; y <= bounds.maxY; y++) {
       for (let x = bounds.minX; x <= bounds.maxX; x++) {
         const p = y * width + x;
         if (!mask[p]) continue;
         let best = -1;
         let bestScore = Number.POSITIVE_INFINITY;
-        for (const candidate of candidates) {
-          const sx = Math.min(width - 1, Math.max(0, x + candidate.dx));
-          const sy = Math.min(height - 1, Math.max(0, y + candidate.dy));
-          const sp = sy * width + sx;
-          if (mask[sp]) continue;
-          const score = localPatchDifference(original, mask, width, height, x, y, sx, sy);
-          if (score < bestScore) {
-            bestScore = score;
-            best = sp;
+        for (let sy = Math.max(0, y - radius); sy <= Math.min(height - 1, y + radius); sy += 2) {
+          for (let sx = Math.max(0, x - radius); sx <= Math.min(width - 1, x + radius); sx += 2) {
+            const sp = sy * width + sx;
+            if (mask[sp]) continue;
+            const score = localPatchDifference(original, mask, width, height, x, y, sx, sy);
+            if (score < bestScore) {
+              bestScore = score;
+              best = sp;
+            }
           }
         }
         if (best < 0) continue;
@@ -832,7 +984,6 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       }
     }
   }
-
   function localPatchDifference(data: Uint8ClampedArray, mask: Uint8Array, width: number, height: number, tx: number, ty: number, sx: number, sy: number) {
     let diff = 0;
     let count = 0;
