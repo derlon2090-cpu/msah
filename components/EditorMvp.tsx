@@ -72,6 +72,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
   const rectStartRef = useRef<{ x: number; y: number } | null>(null);
   const [brushSize, setBrushSize] = useState(34);
   const [imageUrl, setImageUrl] = useState("");
+  const [currentImageId, setCurrentImageId] = useState("");
   const [resultUrl, setResultUrl] = useState("");
   const [uploadedUrl, setUploadedUrl] = useState("");
   const [showAfter, setShowAfter] = useState(false);
@@ -214,7 +215,11 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       image.data[i * 4 + 3] = 255;
     }
     ctx.putImageData(image, 0, 0);
-    return canvasToRgbJpeg(canvas, 0.95);
+    return canvas.toDataURL("image/png");
+  }
+
+  function createClientId(prefix: string) {
+    return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   }
 
   function loadImage(src: string, options: { recordHistory?: boolean; clearFuture?: boolean } = {}) {
@@ -222,6 +227,8 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     return new Promise<void>((resolve) => {
       const img = new Image();
       img.onload = () => {
+        const nextImageId = createClientId("img");
+        setCurrentImageId(nextImageId);
         imageRef.current = img;
         const target = getCanvas();
         if (!target) {
@@ -299,6 +306,7 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     if (target) target.ctx.clearRect(0, 0, target.canvas.width, target.canvas.height);
     clearMask();
     setImageUrl("");
+    setCurrentImageId("");
     setResultUrl("");
     setUploadedUrl("");
     setShowAfter(false);
@@ -1299,6 +1307,9 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
     setStatus("removing");
     try {
       const target = getCanvas();
+      const jobId = createClientId("job");
+      const imageId = currentImageId || createClientId("img");
+      if (!currentImageId) setCurrentImageId(imageId);
       const originalForSave = target ? canvasToRgbJpeg(target.canvas, 0.95) : imageUrl;
       const maskForSave = target
         ? maskToDataUrl(buildRemovalMask(target.canvas.width, target.canvas.height, targetSelection, options), target.canvas.width, target.canvas.height)
@@ -1309,6 +1320,9 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           code,
+          imageId,
+          jobId,
+          maskId: `${jobId}_mask`,
           originalDataUrl: originalForSave,
           resultDataUrl: output,
           maskDataUrl: maskForSave
@@ -1316,7 +1330,8 @@ export function EditorMvp({ previewLocked = false }: { previewLocked?: boolean }
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error ?? "تعذر حفظ الصورة");
-      if (payload.resultUrl) setResultUrl(`${payload.resultUrl}?v=${Date.now()}`);
+      const finalProcessedUrl = payload.finalProcessedUrl ?? payload.resultUrl;
+      if (finalProcessedUrl) setResultUrl(`${finalProcessedUrl}${finalProcessedUrl.includes("?") ? "&" : "?"}v=${Date.now()}`);
       if (payload.usage) setUsage(payload.usage);
       await refreshUsage();
       setStatus("done");

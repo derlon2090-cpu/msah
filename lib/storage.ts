@@ -43,10 +43,36 @@ export function parseImageDataUrl(dataUrl: string) {
   };
 }
 
-export async function uploadDataUrl(dataUrl: string, prefix: "original" | "result") {
+export function readImageDimensions(buffer: Buffer, contentType: string) {
+  if (contentType === "image/png") {
+    if (buffer.length < 24 || buffer.toString("ascii", 1, 4) !== "PNG") throw new Error("Invalid PNG image");
+    return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+  }
+
+  if (contentType === "image/jpeg") {
+    let offset = 2;
+    while (offset < buffer.length) {
+      if (buffer[offset] !== 0xff) {
+        offset += 1;
+        continue;
+      }
+      const marker = buffer[offset + 1];
+      const length = buffer.readUInt16BE(offset + 2);
+      if (marker >= 0xc0 && marker <= 0xc3) {
+        return { height: buffer.readUInt16BE(offset + 5), width: buffer.readUInt16BE(offset + 7) };
+      }
+      offset += 2 + length;
+    }
+  }
+
+  throw new Error("Unsupported image dimensions");
+}
+
+export async function uploadDataUrl(dataUrl: string, prefix: "original" | "result", jobId?: string) {
   const parsed = parseImageDataUrl(dataUrl);
   const bucket = requiredEnv("S3_BUCKET");
-  const key = `${prefix}/${new Date().toISOString().slice(0, 10)}/${randomUUID()}.${parsed.extension}`;
+  const fileId = jobId ? `${jobId}-${Date.now()}-${randomUUID()}` : randomUUID();
+  const key = `${prefix}/${new Date().toISOString().slice(0, 10)}/${fileId}.${parsed.extension}`;
 
   await getClient().send(
     new PutObjectCommand({

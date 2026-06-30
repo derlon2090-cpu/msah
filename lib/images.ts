@@ -12,10 +12,11 @@ export async function createProcessedImageAfterSuccess(input: {
   activationCodeId: string;
   originalDataUrl: string;
   resultDataUrl: string;
+  jobId?: string;
 }) {
   await ensureDatabase();
-  const original = await uploadDataUrl(input.originalDataUrl, "original");
-  const result = await uploadDataUrl(input.resultDataUrl, "result");
+  const original = await uploadDataUrl(input.originalDataUrl, "original", input.jobId);
+  const result = await uploadDataUrl(input.resultDataUrl, "result", input.jobId);
   const now = new Date();
 
   try {
